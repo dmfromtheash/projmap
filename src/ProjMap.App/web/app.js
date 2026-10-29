@@ -1341,7 +1341,7 @@ function renderDetails() {
       ${n.tags.length ? `<div class="card"><h3>Метки</h3><div class="tags">${n.tags.map(t => `<span class="tag">${esc(TAG_RU[t] || t)}</span>`).join('')}</div></div>` : ''}`;
   } else if (S.dtab === 'links') {
     body = (connGroup('Пользуется', 'части, без которых эта не работает (стрелки от неё)', c.out, col.line)
-      + connGroup('Кто пользуется им', 'части, которые сломаются, если её поменять неудачно', c.in, CAT_UI.code.color, true)
+      + connGroup('Кто пользуется им', 'части, которые могут потребовать проверки, если её поменять неудачно', c.in, CAT_UI.code.color, true)
       + connGroup(n.kind === 'table' ? 'Код, работающий с таблицей' : 'База данных', 'чтение и запись таблиц', c.db, CAT_UI.db.color)
       + connGroup('Правится вместе с', 'по истории git: когда меняли эту часть, обычно меняли и эти', c.cochange, CAT_UI.cochange.color))
       || '<div class="card empty">Связей с другими частями не найдено.</div>';
