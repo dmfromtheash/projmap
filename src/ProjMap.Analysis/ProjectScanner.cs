@@ -91,6 +91,8 @@ public static class ProjectScanner
             context.Finish();
             graph = context.Graph.ToGraph();
         }
+        using (context.Measure("problems"))
+            graph = graph with { Problems = ProblemsAnalyzer.Analyze(graph, ct) };
         graph = graph with
         {
             Project = graph.Project with

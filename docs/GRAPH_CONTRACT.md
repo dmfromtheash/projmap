@@ -288,3 +288,91 @@ corrections: `addedFeatures` (terms and/or globs), `featureMerges`,
 matches nothing is listed in `staleOverrides` and never re-targeted silently.
 `ruleSet` records what contributed: `builtin:tiers-v1[+.projmap/views.rules.json][+owner]`.
 `projmap-cli diff` compares views as its own section.
+
+## Problems (optional `problems` section and `report` command)
+
+`problems` is derived after the final views assignments (including project and
+owner overrides) and metric aggregation, on every full and incremental scan.
+Older graphs may omit it. All three graph serializers include it when present;
+it does not change graph nodes, edges, or the graph schema version. Its own
+`schemaVersion` is currently 1.
+
+The section contains `items`, `counts` (all five kinds, including zeros),
+`cycleLimit` (100 per cycle kind), and `hotFileLimit` (20). Counts describe all
+candidates **before** caps, so they can exceed the number of listed items.
+Each item has `kind`, `nodeIds`, a short Russian `reason`, and `severity`
+(`warn` for candidates/cycles/violations, `info` for hot files). Tier violations
+also have `rule` and `edges`; hot files have a 64-bit integer `score`.
+
+| Kind | Detection and ordering |
+| --- | --- |
+| `deadCode` | Type/member candidates with no incoming `call`, `reference`, `inherit`, `implement`, `xamlEvent`, or `binding`; ordinal node id order. |
+| `moduleCycle` | Strongly connected components of module-to-module `projectRef` dependencies. |
+| `fileCycle` | Strongly connected components after mapping code edge endpoints to their files; includes `import` as well as the six code kinds above. |
+| `tierViolation` | Forbidden dependencies grouped by rule and ordered source/target file pair; ordinal rule, source id, target id order. |
+| `hotFile` | Files with positive commits and complexity, ranked by `commits × complexity` descending, then ordinal file id; first 20. |
+
+Dead-code findings are conservative **candidates**, not proof that deletion is
+safe. Exclude `callback`, `interop`, `handler`, `library-only`, `not-shown`,
+`entrypoint`, `test`, `generated`, `tool`/`tools` tags (also on ancestors),
+`subKind: handler`, `Main`/`Program`, entry-point files, and code in `tests/` or
+`tools/` directory segments. All code in test projects is excluded, including
+their public API; visibility is not stored by the graph, so private helpers are
+excluded too. File tags also cover partial declarations in other files.
+
+The reachability guard ports `tools/analysis/reach.py`: excluded nodes are
+conservative roots (including test/tool/generated entries and library hooks),
+follow the six code kinds, promote reached members to their containing types,
+activate callbacks on reached types, and follow member `inherit`/`implement`
+in reverse from contracts to implementations. Declarations in an entry-point
+file are roots, including top-level entry files. Reached nodes are never dead
+candidates. A type with a referenced member is also considered used.
+Disconnected components whose nodes have incoming code edges are not listed as
+dead code by this zero-incoming criterion. `mentions`, `cochange`, package and
+project dependencies are not incoming code usage. File-only imports do not
+prove use of individual TS/JS/Python declarations.
+
+Cycles exclude self/file-internal edges and components with one node. Each
+component lists ordinal-sorted node ids, not every distinct circular path.
+Components are ordered by size descending, then first node id, capped separately
+at 100 module and 100 file components. Endpoints use their actual `Path` (so a
+partial member uses its own file), with containment as a fallback. Parallel
+type/member/file representations create only one adjacency, not extra cycles.
+
+Builtin tier rules are deliberately limited to:
+
+- `domain-dependency`: `domain` must not depend on `frontend`, `application`, or `backend`.
+- `data-frontend`: `data` must not depend on `frontend`.
+- `production-tests`: a non-`tests` source file must not depend on `tests`; a source tagged `test` is excluded from this rule.
+
+Use the **final** assignment even when it is a guess; mixed/unknown tiers do
+not imply a concrete tier for domain/data rules. A non-test source with an
+unknown tier still qualifies for `production-tests`. No renderer-specific
+infrastructure restriction is inferred. Edges without both assigned endpoint
+files are skipped. Direction matters; allowed reverse directions are not
+violations. Each violation includes every contributing original code/import
+edge, ordered by edge id, with original weights and evidence; empty evidence
+paths are expanded from the source node for standalone report use. Evidence
+retains the scanner's existing per-edge cap; no additional cap is applied here.
+
+Hot files use the existing scan's git history window (default 12 months, at most
+3000 commits). A high score is a review priority, not a defect. No git history or
+zero complexity yields no hot-file item. Graph diffs continue to compare their
+existing factual/views sections; derived problems are not a separate diff section.
+
+```text
+projmap-cli report <root> [-o <file.json>] [--md <file.md>] [--views-overrides <file>]
+```
+
+`report` scans the repository and writes a standalone `ProblemsInfo` JSON
+document (the same shape as `graph.problems`). Without `-o`, JSON goes to stdout;
+with `-o`, stdout contains the output path. `--md` additionally writes a Russian
+Markdown report with totals, shown counts, node ids, locations and violation
+evidence. JSON and Markdown destinations must differ. Progress and scanner
+warnings go to stderr. Markdown also lists scanner warnings. Common scan
+options `--git-months N` and `--no-members` apply; omitting members limits
+dead-code detection to the declarations still present. The command creates no
+default `.projmap/graph.json` and writes only explicitly requested files. Use
+output paths outside the scanned repository for a read-only audit. Findings
+return exit code 0; invalid arguments/scan or output errors return 1,
+missing command/root arguments return 2, cancellation returns 130.
