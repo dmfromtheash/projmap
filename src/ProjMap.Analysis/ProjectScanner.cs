@@ -44,7 +44,7 @@ public static class ProjectScanner
         var sameContent = false;
         var samePaths = false;
         var sameGit = false;
-        IRepositoryScanner[] scanners = [new StructureScanner(), new CSharpScanner(), new ImportScanner(),
+        IRepositoryScanner[] scanners = [new StructureScanner(), new CSharpScanner(), new XamlScanner(), new ImportScanner(),
             new GitScanner(), new RoadmapScanner(), new DatabaseScanner(), new DescriptionScanner(), new ViewsScanner()];
         for (var i = 0; i < scanners.Length; i++)
         {

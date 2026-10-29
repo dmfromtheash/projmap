@@ -199,7 +199,7 @@ public sealed class IncrementalScannerTests
         var graph = GraphJson.Deserialize(await File.ReadAllTextAsync(file))!;
         Assert.Empty(graph.Warnings);
         foreach (var stage in new[] { "structure", "csharp", "csharp.parse", "csharp.semanticModels", "csharp.declare", "csharp.walk",
-            "imports", "git", "roadmap", "database", "descriptions", "views", "finalize", "serialization" })
+            "xaml", "imports", "git", "roadmap", "database", "descriptions", "views", "finalize", "serialization" })
         {
             Assert.True(graph.Project.Timings!.Milliseconds[stage] >= 0, stage);
             Assert.Contains(stage + ":", output.ToString());

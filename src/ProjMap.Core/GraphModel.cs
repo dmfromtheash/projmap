@@ -92,6 +92,8 @@ public static class EdgeKinds
     public const string Package = "package";       // module → external package (target id "pkg:Name")
     public const string Reference = "reference";   // file/type uses a symbol of another file/type
     public const string Call = "call";
+    public const string XamlEvent = "xamlEvent";   // XAML file -> code-behind event method
+    public const string Binding = "binding";       // XAML file -> statically resolved data-context member
     public const string Inherit = "inherit";
     public const string Implement = "implement";
     public const string Import = "import";         // TS/JS/Python import
