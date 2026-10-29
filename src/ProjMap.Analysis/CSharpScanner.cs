@@ -30,6 +30,39 @@ internal sealed class CSharpScanner : IRepositoryScanner
         .DistinctBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase)
         .Select(p => { try { return (MetadataReference?)MetadataReference.CreateFromFile(p); } catch (BadImageFormatException) { return null; } })
         .OfType<MetadataReference>().ToArray());
+    // NuGet compile assemblies of a restored project (obj/project.assets.json, written by any build/restore).
+    // Without them every package type (Avalonia, SkiaSharp …) is an error type: event handlers, overrides and
+    // calls taking such arguments stay unbound. Not restored → no package references, as before.
+    private static readonly ConcurrentDictionary<string, MetadataReference?> PackageCache = new(StringComparer.OrdinalIgnoreCase);
+    internal static IReadOnlyList<string> PackageAssemblies(string projectDirectory)
+    {
+        var assets = Path.Combine(projectDirectory, "obj", "project.assets.json");
+        if (!File.Exists(assets)) return [];
+        try
+        {
+            using var document = System.Text.Json.JsonDocument.Parse(File.ReadAllBytes(assets));
+            var root = document.RootElement;
+            var folders = root.GetProperty("packageFolders").EnumerateObject().Select(p => p.Name).ToArray();
+            var libraries = root.GetProperty("libraries");
+            // The runtime-independent target ("net10.0", not "net10.0/win-x64") holds the reference assemblies.
+            var target = root.GetProperty("targets").EnumerateObject().FirstOrDefault(t => !t.Name.Contains('/'));
+            if (target.Value.ValueKind != System.Text.Json.JsonValueKind.Object) return [];
+            var result = new List<string>();
+            foreach (var package in target.Value.EnumerateObject())
+            {
+                if (!package.Value.TryGetProperty("type", out var type) || type.GetString() != "package") continue;
+                if (!package.Value.TryGetProperty("compile", out var compile)) continue;
+                if (!libraries.TryGetProperty(package.Name, out var library) || !library.TryGetProperty("path", out var path)) continue;
+                foreach (var file in compile.EnumerateObject().Select(f => f.Name).Where(f => f.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)))
+                    if (folders.Select(f => Path.Combine(f, path.GetString()!, file)).FirstOrDefault(File.Exists) is { } full) result.Add(Path.GetFullPath(full));
+            }
+            return result;
+        }
+        catch (Exception ex) when (ex is System.Text.Json.JsonException or KeyNotFoundException or InvalidOperationException or IOException) { return []; }
+    }
+    private static IEnumerable<MetadataReference> PackageReferences(IEnumerable<string> paths) => paths
+        .Select(p => PackageCache.GetOrAdd(p, path => { try { return MetadataReference.CreateFromFile(path); } catch (Exception ex) when (ex is IOException or BadImageFormatException) { return null; } }))
+        .OfType<MetadataReference>();
     internal sealed record TypeInfo(string Id, string File, string Module);
     internal sealed class FileAnalysis(SyntaxTree tree, string hash)
     {
@@ -91,8 +124,10 @@ internal sealed class CSharpScanner : IRepositoryScanner
             {
                 try
                 {
+                    var packages = module.Manifest.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase)
+                        ? PackageAssemblies(Path.GetDirectoryName(c.Full(module.Manifest))!) : [];
                     var configuration = string.Join('\n', module.Id, module.ImplicitUsings, string.Join(';', module.Defines),
-                        string.Join(';', module.References), string.Join(';', c.Graph.Nodes[module.Id].Tags));
+                        string.Join(';', module.References), string.Join(';', c.Graph.Nodes[module.Id].Tags), string.Join(';', packages));
                     var old = previous?.Units.GetValueOrDefault(module.Id);
                     if (old?.Configuration != configuration) old = null;
                     var results = old == null ? new Dictionary<string, FileAnalysis>(StringComparer.Ordinal) : new(old.Results, StringComparer.Ordinal);
@@ -136,7 +171,7 @@ internal sealed class CSharpScanner : IRepositoryScanner
                         var allTrees = new List<SyntaxTree>(trees);
                         if (module.ImplicitUsings) allTrees.Add(CSharpSyntaxTree.ParseText("global using System; global using System.Collections.Generic; global using System.Linq; global using System.Threading; global using System.Threading.Tasks; global using System.IO; global using System.Net.Http;", parseOptions));
                         var assembly = "scan_" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(module.Id)))[..16];
-                        compilation = CSharpCompilation.Create(assembly, allTrees, Framework.Value,
+                        compilation = CSharpCompilation.Create(assembly, allTrees, Framework.Value.Concat(PackageReferences(packages)),
                             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, allowUnsafe: true));
                     }
                     else Interlocked.Increment(ref reused);
@@ -307,6 +342,9 @@ internal sealed class CSharpScanner : IRepositoryScanner
             if (!c.Graph.Nodes.ContainsKey(parent)) continue;
             var signature = symbol.GetDocumentationCommentId() ?? symbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
             var subkind = declaration is ConstructorDeclarationSyntax ? "ctor" : symbol is IPropertySymbol ? "property" : symbol is IEventSymbol ? "event" : "method";
+            // Overrides and interface implementations of library members (Avalonia's OnPointerPressed, IDisposable.Dispose …)
+            // are called by the library, not by repository code: they have no incoming edge yet are live.
+            List<string> tags = CalledByLibrary(symbol) ? [.. file.Tags, "callback"] : file.Tags;
             Add(new Node
             {
                 Id = "member:" + u.Module.Id + ":" + signature,
@@ -318,7 +356,7 @@ internal sealed class CSharpScanner : IRepositoryScanner
                 Line = Line(declaration),
                 Language = "C#",
                 Summary = Summary(symbol, ct),
-                Tags = file.Tags,
+                Tags = tags,
                 Metrics = new() { Members = 1, Complexity = Complexity(declaration) }
             });
         }
@@ -344,6 +382,24 @@ internal sealed class CSharpScanner : IRepositoryScanner
                 Metrics = new() { Members = 1 }
             });
         }
+    }
+    // Scanned assemblies are named "scan_…"; anything else (framework, NuGet) is a library.
+    private static bool FromLibrary(ISymbol member) => member.ContainingAssembly is { } a && !a.Name.StartsWith("scan_", StringComparison.Ordinal);
+    private static bool CalledByLibrary(ISymbol symbol)
+    {
+        var overridden = symbol switch
+        {
+            IMethodSymbol m => m.OverriddenMethod as ISymbol,
+            IPropertySymbol p => p.OverriddenProperty,
+            IEventSymbol e => e.OverriddenEvent,
+            _ => null,
+        };
+        while (overridden is not null && !FromLibrary(overridden))
+            overridden = overridden switch { IMethodSymbol m => m.OverriddenMethod, IPropertySymbol p => p.OverriddenProperty, IEventSymbol e => e.OverriddenEvent, _ => null };
+        if (overridden is not null) return true;
+        var type = symbol.ContainingType;
+        return type.AllInterfaces.Where(FromLibrary).SelectMany(i => i.GetMembers())
+            .Any(m => SymbolEqualityComparer.Default.Equals(type.FindImplementationForInterfaceMember(m), symbol));
     }
     private static int Complexity(SyntaxNode declaration) => 1 + declaration.DescendantNodes().Count(n =>
         n is IfStatementSyntax or ForStatementSyntax or ForEachStatementSyntax or WhileStatementSyntax or DoStatementSyntax or CatchClauseSyntax

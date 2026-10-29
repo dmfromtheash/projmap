@@ -16,7 +16,7 @@ public sealed class ScannerTests
         repo.Write("Core/Base.cs", "namespace Sample; public interface IWorker { void Run(); } public record Base { public virtual void Run() {} }");
         repo.Write("Core/Service.cs", "namespace Sample; /// <summary>Useful service.</summary>\npublic class Service { public static void Work() {} }");
         repo.Write("App/App.csproj", Project.Replace("</Project>", "<ItemGroup><ProjectReference Include=\"../Core/Core.csproj\"/><PackageReference Include=\"Unresolved.Package\" Version=\"1.0\"/></ItemGroup></Project>"));
-        repo.Write("App/Window.cs", "namespace Sample; public class Window { public event System.EventHandler<Missing.ClosingArgs>? Closing; public Window() { Closing += OnClosing; } private void OnClosing(object? sender, Missing.ClosingArgs e) {} }");
+        repo.Write("App/Window.cs", "namespace Sample; public class Window { public event System.EventHandler<Missing.ClosingArgs>? Closing; public Window() { Closing += OnClosing; } private void OnClosing(object? sender, Missing.ClosingArgs e) {} public override string ToString() => \"w\"; } public sealed class Lease : System.IDisposable { public void Dispose() {} public void Use() {} }");
         repo.Write("App/Worker.cs", "namespace Sample; public record Worker : Base, IWorker { public Worker() {} public int Value { get; set; } public int Visible; private int Secret; public override void Run() { if (Value > 0 && Value < 10) Service.Work(); Service.Work(); } }");
         var before = repo.Snapshot();
         var graph = await ProjectScanner.ScanAsync(new(repo.Root));
@@ -40,6 +40,11 @@ public sealed class ScannerTests
         // A call through IWorker.Run or Base.Run reaches Worker.Run: the member links to the contract it fulfils.
         Assert.Contains(graph.Edges, e => e.Kind == EdgeKinds.Implement && e.Source.EndsWith(":M:Sample.Worker.Run") && e.Target.EndsWith(":M:Sample.IWorker.Run"));
         Assert.Contains(graph.Edges, e => e.Kind == EdgeKinds.Inherit && e.Source.EndsWith(":M:Sample.Worker.Run") && e.Target.EndsWith(":M:Sample.Base.Run"));
+        // Members the framework calls (overrides, library interface implementations) are tagged; own members are not.
+        Assert.Contains("callback", Assert.Single(graph.Nodes, n => n.Id.EndsWith(":M:Sample.Window.ToString")).Tags);
+        Assert.Contains("callback", Assert.Single(graph.Nodes, n => n.Id.EndsWith(":M:Sample.Lease.Dispose")).Tags);
+        Assert.DoesNotContain("callback", Assert.Single(graph.Nodes, n => n.Id.EndsWith(":M:Sample.Lease.Use")).Tags);
+        Assert.DoesNotContain("callback", run.Tags); // overrides Base.Run from this repository
         // A handler subscribed to an event whose argument type comes from a missing library is still referenced.
         Assert.Contains(graph.Edges, e => e.Kind == EdgeKinds.Reference && e.Source.EndsWith(":M:Sample.Window.#ctor") && e.Target.Contains(":M:Sample.Window.OnClosing("));
         Assert.Contains(graph.Edges, e => e.Kind == EdgeKinds.Reference && e.Source.EndsWith(":M:Sample.Worker.Run") && e.Target.EndsWith(":P:Sample.Worker.Value"));
@@ -50,6 +55,34 @@ public sealed class ScannerTests
         Assert.Equal(graph.Nodes.Select(n => n.Id), again.Nodes.Select(n => n.Id));
         Assert.Equal(graph.Edges.Select(e => (e.Id, e.Weight)), again.Edges.Select(e => (e.Id, e.Weight)));
     }
+    [Fact]
+    public async Task RestoredNuGetPackagesAreReferencedSoLibraryCallbacksAreRecognized()
+    {
+        using var repo = new FixtureRepository();
+        // A tiny "package" assembly, placed like a NuGet package and listed in obj/project.assets.json as `dotnet restore` does.
+        var library = Microsoft.CodeAnalysis.CSharp.CSharpCompilation.Create("Lib",
+            [Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree.ParseText("namespace Lib; public class Control { public virtual void OnRender() {} }")],
+            [Microsoft.CodeAnalysis.MetadataReference.CreateFromFile(typeof(object).Assembly.Location)],
+            new(Microsoft.CodeAnalysis.OutputKind.DynamicallyLinkedLibrary));
+        var dll = Path.Combine(repo.Root, "pkgs", "lib", "1.0.0", "lib", "net10.0", "Lib.dll");
+        Directory.CreateDirectory(Path.GetDirectoryName(dll)!);
+        using (var stream = File.Create(dll)) Assert.True(library.Emit(stream).Success);
+        repo.Write("App/App.csproj", Project);
+        repo.Write("App/obj/project.assets.json", System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, object>
+        {
+            ["targets"] = new Dictionary<string, object>
+            {
+                ["net10.0"] = new Dictionary<string, object>
+                { ["Lib/1.0.0"] = new { type = "package", compile = new Dictionary<string, object> { ["lib/net10.0/Lib.dll"] = new { } } } }
+            },
+            ["libraries"] = new Dictionary<string, object> { ["Lib/1.0.0"] = new { path = "lib/1.0.0" } },
+            ["packageFolders"] = new Dictionary<string, object> { [Path.Combine(repo.Root, "pkgs") + Path.DirectorySeparatorChar] = new { } },
+        }));
+        repo.Write("App/View.cs", "namespace Sample; public class View : Lib.Control { public override void OnRender() {} }");
+        var graph = await ProjectScanner.ScanAsync(new(repo.Root) { GitMonths = 0 });
+        Assert.Contains("callback", Assert.Single(graph.Nodes, n => n.Id.EndsWith(":M:Sample.View.OnRender")).Tags);
+    }
+
     [Fact]
     public async Task ImportsResolveAliasesReexportsWorkspacesAndPythonPackages()
     {
