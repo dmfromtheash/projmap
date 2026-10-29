@@ -298,7 +298,8 @@ public sealed class ScannerTests
         var reports = new List<ScanProgress>();
         await ProjectScanner.ScanAsync(new(repo.Root) { Progress = new CallbackProgress(reports.Add) });
         Assert.Equal(0, reports.First().Fraction); Assert.Equal(1, reports.Last().Fraction);
-        Assert.Equal(8, reports.Count);
+        Assert.Equal(9, reports.Count);
+        Assert.Contains(reports, r => r.Stage == "views");
         using var source = new CancellationTokenSource(); source.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => ProjectScanner.ScanAsync(new(repo.Root), source.Token));
     }

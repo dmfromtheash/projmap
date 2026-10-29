@@ -25,7 +25,9 @@ public sealed record GraphDiffResult
     public required GraphDiffSection Edges { get; init; }
     public required GraphDiffSection Roadmap { get; init; }
     public required GraphDiffSection Database { get; init; }
-    public bool Identical => Nodes.Same && Edges.Same && Roadmap.Same && Database.Same;
+    /// Tier assignments ("tier:&lt;node&gt;"), features and memberships of the optional `views` section.
+    public GraphDiffSection Views { get; init; } = new();
+    public bool Identical => Nodes.Same && Edges.Same && Roadmap.Same && Database.Same && Views.Same;
 }
 
 public static class GraphDiff
@@ -58,7 +60,18 @@ public static class GraphDiff
             Edges = Section(a.Edges.Where(KeepEdge), b.Edges.Where(KeepEdge), e => e.Id, EdgeKey),
             Roadmap = Section(a.Roadmap, b.Roadmap, r => r.Id, RoadmapKey),
             Database = Section(a.Database?.Tables ?? [], b.Database?.Tables ?? [], t => t.Name, TableKey),
+            Views = Section(ViewItems(a.Views), ViewItems(b.Views), x => x.Id, x => x.Content),
         };
+    }
+
+    static IEnumerable<(string Id, string Content)> ViewItems(ViewsInfo? v)
+    {
+        if (v == null) yield break;
+        yield return ("ruleSet", v.RuleSet);
+        foreach (var t in v.Assignments)
+            yield return ("tier:" + t.NodeId, $"{t.Tier}|{t.Decision}|{t.Score:R}|{t.Role}|{t.Execution}|{string.Join(',', t.Alternatives ?? [])}");
+        foreach (var f in v.Features) yield return (f.Id, $"{f.Name}|{f.State}|{string.Join(',', f.Terms)}");
+        foreach (var m in v.Memberships) yield return ($"member:{m.FeatureId}|{m.NodeId}", $"{m.Role}|{m.Score:R}");
     }
 
     static GraphDiffSection Section<T>(IEnumerable<T> a, IEnumerable<T> b, Func<T, string> id, Func<T, string> content)

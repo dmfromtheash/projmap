@@ -148,7 +148,15 @@ metrics include generated/test source unless its directory is excluded or
 containers). Authors are distinct git name/email identities; `LastChange` uses
 the author timestamp. Other node kinds keep the default git metric values.
 Tags are `test`, `generated`, `entrypoint`, `ui`. Type/member nodes inherit file
-tags. Unknown languages omit `Language`. Languages are detected from extensions,
+tags. Members additionally carry `callback` (an override or interface
+implementation of a library member: the framework calls it, so no incoming edge
+does not mean dead code), `interop` (a field of a `[StructLayout]` struct that
+mirrors a native layout) and `handler`. A **handler** is its own member node
+(`subKind: handler`) for a lambda wired to a control — an argument of a call
+that also passes a string literal (`Ui.TextButton("Up", "Наверх", () => …)`) or
+the right side of `x.Click += (…) => …`. Its `Name` is the call plus the
+control's text («TextButton «Up · Наверх»»), its parent is the declaring type,
+its id is the containing member's id + `#h<n>` in source order. Unknown languages omit `Language`. Languages are detected from extensions,
 not proof that a language-specific semantic scanner exists.
 
 `Project.ScannedAt` is UTC start time. `ScanMilliseconds` covers scanning,
@@ -164,3 +172,60 @@ Multiple engines yield `unknown` and a warning. `Sources` are schema-bearing
 files. Table definitions merge by case-insensitive schema-qualified name; column
 and FK evidence from several sources can enrich one table. Database identity
 is not currently separated per connection or physical database.
+
+## Views (optional `views` section)
+
+`views` is a projection over the same graph; it never changes nodes, edges or
+the `ParentId` tree. It is absent in graphs written before it existed, and every
+serializer (`WriteAsync`, `Serialize`, `SerializeCompact`) writes it when present.
+`views.schemaVersion` is versioned separately from the graph's `schemaVersion`.
+It is rebuilt on every full or incremental scan from the graph, file texts, the
+project rules file and the owner's corrections, so both scans give equal views.
+
+**Tiers.** `assignments` hold one entry per file node with a language:
+`tier` ∈ `frontend | application | domain | data | backend | infrastructure |
+tests | docs | mixed | unclassified`, optional `role` (`view`, `viewModel`,
+`endpoint`, `botAdapter`, `schema`, `storage`, `platform`, `compositionRoot`,
+`buildTool`, `cliEntry`, `test`, `doc`, …) and `execution` (`desktop | browser |
+server | cli | shared`), a `score` 0..1, a Russian one-line `reason`, and the
+`evidence` that produced it (`family`, `tier`, `score`, `rule`, `detail`).
+Types and members take their file's tier; containers show the distribution.
+
+Scoring is explainable, not a probability. Families: `syntax` (file content and
+extension: markup, UI base classes, handlers in a UI-framework module, endpoints,
+Discord events, schemas, DbContext, interop, build files, tests, Markdown),
+`rules` (project rules file), and the weak `path` (folder words), `module`
+(module name words), `framework` (≤ 0.15 from module packages) and `usage`
+(storage access next to another role, file IO). Inside a family the strongest
+item counts; families combine as 1 − Π(1 − s); only weak families cap the result
+at 0.69. Decisions: `automatic` (≥ 0.75 and ≥ 0.15 ahead of the next tier),
+`guess` (below that; the reason starts with «предположение»), `mixed` (two tiers
+both ≥ 0.75 and close; `alternatives` names them, no winner is invented),
+`unknown` (< 0.3), `override` (score 1; the automatic evidence is kept).
+A test file or a Markdown document is `tests`/`docs` whatever else it contains.
+
+**Features.** `features` are named groups that cut across tiers and modules:
+`id` (`feature:<term>` for found ones, never derived from the display name),
+`name` (Russian where known), `state` (`candidate | manual`), `terms`, `files`,
+`tierIds`. They are found from file-name and folder words of product code
+(tools, experiments, samples and docs folders do not seed them): a word in ≥ 3
+files, in at most a fifth of them (floor 8), across ≥ 2 tiers; near-synonyms
+(Jaccard ≥ 0.6) join; at most 24. `memberships` link a feature to nodes with a
+`role`: `implementation` (code file), `test`, `doc`, and `entry` — a handler in
+a feature file or one that directly calls into it. A node may be in several
+features; totals must count unique nodes.
+
+**Rules and corrections.** `.projmap/views.rules.json` (read by name; comments
+and trailing commas allowed) has `rules` — `{id, match, assign:{tier, role?,
+execution?}, score ≤ 0.95, reason?}` where `match` uses `pathGlob`, `language`,
+`tag`, `text` (regex) and `all`/`any`/`not` — and `overrides` in the
+`ViewsOverrides` shape. The owner's corrections live in the projmap app store
+(`views/<root-hash>.json`), never in the scanned repository; the CLI accepts the
+same file with `--views-overrides`. Order: builtin rules → project rules →
+project overrides → owner overrides. Tier overrides select by exact `nodeId`
+(wins), exact path, then glob; later entries win within a level. Feature
+corrections: `addedFeatures` (terms and/or globs), `featureMerges`,
+`hiddenFeatures`, `featureNames`, `members` include/exclude. A correction that
+matches nothing is listed in `staleOverrides` and never re-targeted silently.
+`ruleSet` records what contributed: `builtin:tiers-v1[+.projmap/views.rules.json][+owner]`.
+`projmap-cli diff` compares views as its own section.

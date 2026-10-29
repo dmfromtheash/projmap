@@ -35,9 +35,30 @@ static class AppStore
         File.WriteAllText(RecentFile, JsonSerializer.Serialize(list.Where(r => Directory.Exists(r.Root)).Take(12).ToList()));
     }
 
-    public static string CachePath(string root)
+    public static string CachePath(string root) => Path.Combine(Dir, "cache", Key(root) + ".json");
+
+    static string Key(string root) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(root.ToLowerInvariant())))[..16];
+
+    /// The owner's tier/feature corrections for one project; kept here, never in the scanned repository.
+    static string ViewsOverridesPath(string root) => Path.Combine(Dir, "views", Key(root) + ".json");
+
+    public static ProjMap.Core.ViewsOverrides? LoadViewsOverrides(string root)
     {
-        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(root.ToLowerInvariant())))[..16];
-        return Path.Combine(Dir, "cache", hash + ".json");
+        try
+        {
+            var path = ViewsOverridesPath(root);
+            return File.Exists(path) ? JsonSerializer.Deserialize<ProjMap.Core.ViewsOverrides>(File.ReadAllText(path), ProjMap.Core.GraphJson.Options) : null;
+        }
+        catch { return null; }
+    }
+
+    /// Atomic replace: a crash mid-write never leaves a half-written corrections file.
+    public static void SaveViewsOverrides(string root, ProjMap.Core.ViewsOverrides overrides)
+    {
+        var path = ViewsOverridesPath(root);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var temp = path + ".tmp";
+        File.WriteAllText(temp, JsonSerializer.Serialize(overrides, ProjMap.Core.GraphJson.Options));
+        File.Move(temp, path, overwrite: true);
     }
 }

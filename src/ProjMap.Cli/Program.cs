@@ -16,7 +16,7 @@ namespace ProjMap.Cli
             {
                 if (args.Length < 2 || args[0] is not ("scan" or "stats" or "diff"))
                 {
-                    await error.WriteLineAsync("Usage: projmap-cli scan <root> [-o <file>] [--git-months N] [--no-members] [--timings]\n       projmap-cli stats <graph.json>\n" +
+                    await error.WriteLineAsync("Usage: projmap-cli scan <root> [-o <file>] [--git-months N] [--no-members] [--timings] [--views-overrides <file>]\n       projmap-cli stats <graph.json>\n" +
                                                "       projmap-cli diff <a.json> <b.json> [--ignore-git] [--ignore-positions] [--limit N] [-o <report.json>]");
                     return 2;
                 }
@@ -39,7 +39,7 @@ namespace ProjMap.Cli
                 }
                 var root = Path.GetFullPath(args[1]);
                 string? destination = null;
-                var months = 12; var members = true; var timings = false;
+                var months = 12; var members = true; var timings = false; ViewsOverrides? overrides = null;
                 for (var i = 2; i < args.Length; i++)
                 {
                     switch (args[i])
@@ -51,6 +51,10 @@ namespace ProjMap.Cli
                             break;
                         case "--no-members": members = false; break;
                         case "--timings": timings = true; break;
+                        case "--views-overrides" when i + 1 < args.Length:
+                            overrides = System.Text.Json.JsonSerializer.Deserialize<ViewsOverrides>(await File.ReadAllTextAsync(args[++i], ct), GraphJson.Options)
+                                ?? throw new InvalidDataException("Empty views overrides file.");
+                            break;
                         default: throw new ArgumentException("Unknown or incomplete option: " + args[i]);
                     }
                 }
@@ -59,6 +63,7 @@ namespace ProjMap.Cli
                 {
                     GitMonths = months,
                     IncludeMembers = members,
+                    ViewOverrides = overrides,
                     Progress = new InlineProgress(p => error.WriteLine($"[{p.Fraction:P0}] {p.Stage} {p.Detail}"))
                 }, ct);
                 Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
@@ -102,7 +107,7 @@ namespace ProjMap.Cli
             var diff = GraphDiff.Compare(a, b, options);
             await output.WriteLineAsync($"A: {a.Project.Root} ({a.Project.GitBranch ?? "-"} {a.Project.GitHead?[..Math.Min(7, a.Project.GitHead.Length)] ?? "-"})");
             await output.WriteLineAsync($"B: {b.Project.Root} ({b.Project.GitBranch ?? "-"} {b.Project.GitHead?[..Math.Min(7, b.Project.GitHead.Length)] ?? "-"})");
-            foreach (var (name, section) in new[] { ("Nodes", diff.Nodes), ("Edges", diff.Edges), ("Roadmap", diff.Roadmap), ("Database", diff.Database) })
+            foreach (var (name, section) in new[] { ("Nodes", diff.Nodes), ("Edges", diff.Edges), ("Roadmap", diff.Roadmap), ("Database", diff.Database), ("Views", diff.Views) })
             {
                 await output.WriteLineAsync($"{name}: only in A {section.OnlyInA.Count}, only in B {section.OnlyInB.Count}, changed {section.Changed.Count}");
                 foreach (var (label, ids) in new[] { ("only in A", section.OnlyInA), ("only in B", section.OnlyInB), ("changed", section.Changed) })

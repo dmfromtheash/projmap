@@ -11,6 +11,8 @@ public sealed record ScanOptions(string Root)
     public int MaxCommits { get; init; } = 3000;
     public bool IncludeMembers { get; init; } = true;
     public bool IncludeTests { get; init; } = true;
+    /// The owner's tier/feature corrections (kept outside the repository, e.g. in the app store).
+    public ViewsOverrides? ViewOverrides { get; init; }
     public IProgress<ScanProgress>? Progress { get; init; }
 }
 
@@ -43,7 +45,7 @@ public static class ProjectScanner
         var samePaths = false;
         var sameGit = false;
         IRepositoryScanner[] scanners = [new StructureScanner(), new CSharpScanner(), new ImportScanner(),
-            new GitScanner(), new RoadmapScanner(), new DatabaseScanner(), new DescriptionScanner()];
+            new GitScanner(), new RoadmapScanner(), new DatabaseScanner(), new DescriptionScanner(), new ViewsScanner()];
         for (var i = 0; i < scanners.Length; i++)
         {
             ct.ThrowIfCancellationRequested();
@@ -89,8 +91,14 @@ public static class ProjectScanner
             context.Finish();
             graph = context.Graph.ToGraph();
         }
-        graph = graph with { Project = graph.Project with { ScanMilliseconds = watch.ElapsedMilliseconds,
-            Timings = new() { Milliseconds = context.Timings.OrderBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Value), Counts = context.Counts } } };
+        graph = graph with
+        {
+            Project = graph.Project with
+            {
+                ScanMilliseconds = watch.ElapsedMilliseconds,
+                Timings = new() { Milliseconds = context.Timings.OrderBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Value), Counts = context.Counts }
+            }
+        };
         state.Reusable = graph.Warnings.Count == 0;
         options.Progress?.Report(new("complete", 1, $"{context.Graph.Nodes.Count} nodes"));
         return new(graph, state);
@@ -112,6 +120,7 @@ internal sealed class GraphBuilder(ProjectInfo project)
     public List<RoadmapItem> Roadmap { get; } = [];
     public ConcurrentQueue<ScanWarning> Warnings { get; } = new();
     public DatabaseInfo? Database { get; set; }
+    public ViewsInfo? Views { get; set; }
     public ProjectGraph ToGraph() => new()
     {
         Project = Project,
@@ -119,7 +128,8 @@ internal sealed class GraphBuilder(ProjectInfo project)
         Edges = Edges.Values.OrderBy(x => x.Id, StringComparer.Ordinal).ToList(),
         Roadmap = Roadmap.OrderBy(x => x.Source?.Path, StringComparer.Ordinal).ThenBy(x => x.Source?.Line).ToList(),
         Warnings = Warnings.OrderBy(x => x.Scanner).ThenBy(x => x.Path).ThenBy(x => x.Message).ToList(),
-        Database = Database
+        Database = Database,
+        Views = Views
     };
 }
 

@@ -20,6 +20,8 @@ public sealed record ProjectGraph
     public List<RoadmapItem> Roadmap { get; init; } = [];
     public DatabaseInfo? Database { get; init; }
     public List<ScanWarning> Warnings { get; init; } = [];
+    /// Optional projection layer (tiers, features); absent in graphs written before it existed.
+    public ViewsInfo? Views { get; init; }
 }
 
 public sealed record ProjectInfo
@@ -181,6 +183,7 @@ public static class GraphJson
         Property("roadmap", graph.Roadmap);
         if (graph.Database != null) Property("database", graph.Database);
         Property("warnings", graph.Warnings);
+        if (graph.Views != null) Property("views", graph.Views);
         await writer.FlushAsync(ct).ConfigureAwait(false);
         if (graph.Project.Timings is { } timings)
             timings.Milliseconds["serialization"] = System.Diagnostics.Stopwatch.GetElapsedTime(start).TotalMilliseconds;
@@ -224,6 +227,7 @@ public static class GraphJson
             roadmap = g.Roadmap,
             database = g.Database,
             warnings = g.Warnings,
+            views = g.Views,
         };
         return JsonSerializer.SerializeToUtf8Bytes(doc, Options);
     }

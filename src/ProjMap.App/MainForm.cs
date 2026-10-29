@@ -177,6 +177,16 @@ sealed class MainForm : Form
             case "title":
                 Text = Str("text");
                 break;
+            case "saveViewsOverrides" when _root != null && m.TryGetProperty("overrides", out var data):
+                // the owner corrected a tier or a feature: keep it in the app store and rebuild the views
+                try
+                {
+                    AppStore.SaveViewsOverrides(_root, data.Deserialize<ViewsOverrides>(GraphJson.Options) ?? new());
+                    _ = ScanAsync();
+                }
+                catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
+                { Post(new { type = "error", message = "Не удалось сохранить правку: " + ex.Message }); }
+                break;
         }
     }
 
@@ -189,6 +199,8 @@ sealed class MainForm : Form
         if (!Directory.Exists(root)) { Post(new { type = "error", message = $"Папка не найдена: {root}" }); return; }
         root = Program.FindGitRoot(Path.GetFullPath(root)) ?? Path.GetFullPath(root);
         AppStore.TouchRecent(root);
+        // the viewer edits corrections on top of what is already saved
+        Post(new { type = "viewsOverrides", root, overrides = AppStore.LoadViewsOverrides(root) ?? new ViewsOverrides() });
         // the same project again (e.g. from «Недавние»): just show what we have, no new scan
         if (string.Equals(root, _root, StringComparison.OrdinalIgnoreCase) && _graphJson != null)
         {
@@ -243,7 +255,8 @@ sealed class MainForm : Form
         try
         {
             var sw = Stopwatch.StartNew();
-            var result = await Task.Run(() => ProjectScanner.ScanAsync(new ScanOptions(root) { Progress = progress }, _scanState, paths, _scanCts.Token));
+            var overrides = AppStore.LoadViewsOverrides(root);
+            var result = await Task.Run(() => ProjectScanner.ScanAsync(new ScanOptions(root) { Progress = progress, ViewOverrides = overrides }, _scanState, paths, _scanCts.Token));
             if (root != _root) return;
             _scanState = result.State;
             var graph = result.Graph;
