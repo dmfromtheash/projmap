@@ -43,7 +43,7 @@ public static class GraphDiff
             // The root node is named after the scanned folder, which is scan metadata like Project.Root.
             var name = n.Kind == NodeKinds.System ? "" : n.Name;
             var line = ignorePositions ? null : n.Line;
-            return $"{n.Kind}|{name}|{n.ParentId}|{n.Path}|{line}|{n.Language}|{n.SubKind}|{n.Summary}|{string.Join(',', n.Tags)}" +
+            return $"{n.Kind}|{name}|{n.ParentId}|{n.Path}|{line}|{n.Language}|{n.SubKind}|{n.Anchor}|{n.Summary}|{string.Join(',', n.Tags)}" +
                    $"|{m.Loc}|{m.Files}|{m.Types}|{m.Members}|{m.Complexity}{git}";
         }
         string EdgeKey(Edge e) => ignorePositions ? $"{e.Weight}"

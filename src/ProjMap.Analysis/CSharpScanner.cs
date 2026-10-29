@@ -8,7 +8,7 @@ using ProjMap.Core;
 
 namespace ProjMap.Analysis;
 
-internal sealed class CSharpScanner : IRepositoryScanner
+internal sealed partial class CSharpScanner : IRepositoryScanner
 {
     public string Name => "csharp";
     private static IEnumerable<string> FrameworkPaths()
@@ -69,6 +69,7 @@ internal sealed class CSharpScanner : IRepositoryScanner
         public SyntaxTree Tree { get; } = tree;
         public string Hash { get; } = hash;
         public List<Node> Nodes { get; } = [];
+        public List<(string Id, ExpressionSyntax Callback, SyntaxNode Declaration)> Handlers { get; } = [];
         public Dictionary<string, TypeInfo> Types { get; } = new(StringComparer.Ordinal);
         public List<Edge> Edges { get; set; } = [];
         public List<string>? FileTags { get; set; }
@@ -238,6 +239,8 @@ internal sealed class CSharpScanner : IRepositoryScanner
                 finally { item.Unit.ReleaseModel(item.Tree); }
                 return ValueTask.CompletedTask;
             });
+        // Visibility depends on uses in other partial files, even when their bodies alone changed.
+        foreach (var unit in units.Values) RefreshNotShown(c, unit, ct);
         foreach (var unit in units.Values.OrderBy(u => u.Module.Id, StringComparer.Ordinal))
             foreach (var result in unit.Results.Values.OrderBy(r => r.Tree.FilePath, StringComparer.Ordinal))
                 foreach (var edge in result.Edges) c.Merge(edge);
@@ -359,7 +362,9 @@ internal sealed class CSharpScanner : IRepositoryScanner
                 Tags = tags,
                 Metrics = new() { Members = 1, Complexity = Complexity(declaration) }
             });
-            foreach (var (lambda, id, label) in Handlers(declaration, "member:" + u.Module.Id + ":" + signature))
+            foreach (var (lambda, id, label) in Handlers(declaration, "member:" + u.Module.Id + ":" + signature, model, ct))
+            {
+                result.Handlers.Add((id, lambda, declaration));
                 Add(new Node
                 {
                     Id = id,
@@ -370,9 +375,11 @@ internal sealed class CSharpScanner : IRepositoryScanner
                     Path = tree.FilePath,
                     Line = Line(lambda),
                     Language = "C#",
-                    Tags = [.. file.Tags, "handler"],
+                    Anchor = "member:" + u.Module.Id + ":" + signature + "|" + HandlerAnchor(lambda, label, model, ct),
+                    Tags = LibraryOnly(lambda, model, ct) ? [.. file.Tags, "handler", "library-only"] : [.. file.Tags, "handler"],
                     Metrics = new() { Members = 1, Complexity = Complexity(lambda) }
                 });
+            }
         }
         foreach (var declaration in root.DescendantNodes().OfType<VariableDeclaratorSyntax>().Where(n => n.Parent?.Parent is FieldDeclarationSyntax or EventFieldDeclarationSyntax))
         {
@@ -403,9 +410,9 @@ internal sealed class CSharpScanner : IRepositoryScanner
     // also passes a string literal — the control's name or text) or `button.Click += (_, _) => …`. Each becomes its own
     // node, so "which button runs what" is visible instead of everything belonging to the method that builds the panel.
     // Ids: the containing member's id + "#h<n>" in source order, stable while that member's handlers keep their order.
-    internal static List<(AnonymousFunctionExpressionSyntax Lambda, string Id, string Label)> Handlers(SyntaxNode declaration, string memberId)
+    internal static List<(ExpressionSyntax Lambda, string Id, string Label)> Handlers(SyntaxNode declaration, string memberId, SemanticModel model, CancellationToken ct)
     {
-        var result = new List<(AnonymousFunctionExpressionSyntax, string, string)>();
+        var result = new List<(ExpressionSyntax, string, string)>();
         foreach (var lambda in declaration.DescendantNodes().OfType<AnonymousFunctionExpressionSyntax>())
         {
             string? label = lambda.Parent switch
@@ -425,6 +432,28 @@ internal sealed class CSharpScanner : IRepositoryScanner
             result.Add((lambda, memberId + "#h" + (result.Count + 1).ToString(System.Globalization.CultureInfo.InvariantCulture),
                 label.Length > 80 ? label[..80] + "…" : label));
         }
+        // Append newly supported forms, preserving every legacy #h<n> even if a new form occurs earlier.
+        var known = result.Select(x => x.Item1).ToHashSet();
+        foreach (var expression in declaration.DescendantNodes().OfType<ExpressionSyntax>())
+        {
+            if (known.Contains(expression)) continue;
+            if (expression.Parent is not ArgumentSyntax { Parent: ArgumentListSyntax list } arg) continue;
+            if (list.Parent is not (InvocationExpressionSyntax or BaseObjectCreationExpressionSyntax)) continue;
+            var before = list.Arguments.TakeWhile(a => a != arg).Select(a => a.Expression).ToArray();
+            var method = Resolved(list.Parent!, model, ct) as IMethodSymbol;
+            var timer = method?.ContainingType.Name.EndsWith("Timer", StringComparison.Ordinal) == true;
+            var routedEvent = method?.Name == "AddHandler" && before.Any(e => e.ToString().EndsWith("Event", StringComparison.Ordinal));
+            if (!timer && !routedEvent && !before.Any(e => IsText(e) || model.GetTypeInfo(e, ct).Type?.SpecialType == SpecialType.System_String)) continue;
+            if (model.GetTypeInfo(expression, ct).ConvertedType?.TypeKind != TypeKind.Delegate) continue;
+            // Delegate parameters/method groups are entry points too (e.g. Ui.IconButton(..., vm.Undo)).
+            if (expression is not (AnonymousFunctionExpressionSyntax or IdentifierNameSyntax or MemberAccessExpressionSyntax)) continue;
+            var captions = before.Where(e => IsText(e) || model.GetTypeInfo(e, ct).Type?.SpecialType == SpecialType.System_String).Take(2).ToArray();
+            var label = Callee(list.Parent!) + (captions.Length == 0 ? "" : " «" + string.Join(" · ", captions
+                .Select(e => e is LiteralExpressionSyntax l ? l.Token.ValueText : e.ToString())) + "»");
+            label = Regex.Replace(label, @"\s+", " ");
+            result.Add((expression, memberId + "#h" + (result.Count + 1).ToString(System.Globalization.CultureInfo.InvariantCulture),
+                label.Length > 80 ? label[..80] + "…" : label));
+        }
         return result;
         static bool IsText(ExpressionSyntax e) => e.IsKind(SyntaxKind.StringLiteralExpression) || e is InterpolatedStringExpressionSyntax
             || e is BinaryExpressionSyntax { RawKind: (int)SyntaxKind.AddExpression } b && (IsText(b.Left) || IsText(b.Right));
@@ -433,6 +462,7 @@ internal sealed class CSharpScanner : IRepositoryScanner
             InvocationExpressionSyntax { Expression: MemberAccessExpressionSyntax m } => m.Name.Identifier.ValueText,
             InvocationExpressionSyntax { Expression: SimpleNameSyntax n } => n.Identifier.ValueText,
             ObjectCreationExpressionSyntax o => "new " + o.Type,
+            ImplicitObjectCreationExpressionSyntax => "new",
             _ => "handler",
         };
     }
@@ -502,7 +532,7 @@ internal sealed class CSharpScanner : IRepositoryScanner
             if (!handlerCache.TryGetValue(decl, out var map))
             {
                 handlerCache[decl] = map = [];
-                foreach (var (lambda, id, _) in Handlers(decl, memberId))
+                foreach (var (lambda, id, _) in Handlers(decl, memberId, model, ct))
                     if (c.Graph.Nodes.ContainsKey(id)) map[lambda] = id;
             }
             return map;
@@ -517,7 +547,7 @@ internal sealed class CSharpScanner : IRepositoryScanner
             if (id == null) return null;
             var handlers = HandlersOf(decl, id);
             if (handlers.Count > 0)
-                foreach (var ancestor in site.Ancestors().TakeWhile(a => a != decl))
+                foreach (var ancestor in site.AncestorsAndSelf().TakeWhile(a => a != decl))
                     if (handlers.TryGetValue(ancestor, out var handler)) return handler;
             return id;
         }
@@ -527,7 +557,7 @@ internal sealed class CSharpScanner : IRepositoryScanner
             if (SourceMember(decl) is not { } memberId) return;
             foreach (var (lambda, handler) in HandlersOf(decl, memberId))
             {
-                var from = SourceMember(lambda) ?? memberId;
+                var from = SourceMember(lambda.Parent!) ?? memberId;
                 var key = (EdgeKinds.Reference, from, handler);
                 if (!edges.TryGetValue(key, out var edge)) edges[key] = edge = new(EdgeKinds.Reference, from, handler);
                 var snippet = Regex.Replace(lambda.Parent?.ToString() ?? lambda.ToString(), @"\s+", " ");

@@ -9,7 +9,7 @@ namespace ProjMap.Core;
 ///  - Nodes form one tree through <see cref="Node.ParentId"/> (system → module → folder → file → type → member).
 ///    Roadmap items, docs and database tables are separate roots (ParentId = their group node).
 ///  - Edges are stored at the finest level known (file or type). The viewer rolls them up to folders/modules.
-///  - Ids are stable between scans: derived from paths / fully qualified names, never from counters.
+///  - Ids derive from paths / fully qualified names; handlers retain legacy ordinals with optional stable anchors.
 /// </summary>
 public sealed record ProjectGraph
 {
@@ -69,6 +69,8 @@ public sealed record Node
     public string? Language { get; init; }
     /// For types: class|record|struct|interface|enum|delegate; for members: method|property|field|event|ctor|function.
     public string? SubKind { get; init; }
+    /// Optional handler identity: owner member id + "|" + control name (or label).
+    public string? Anchor { get; init; }
     public string? Summary { get; init; }      // XML doc summary / first doc comment / first markdown paragraph
     public NodeMetrics Metrics { get; init; } = new();
     public List<string> Tags { get; init; } = []; // e.g. "test", "ui", "generated", "entrypoint", "hot"
