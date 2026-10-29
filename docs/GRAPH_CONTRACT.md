@@ -2,7 +2,7 @@
 
 The analyzer returns `ProjMap.Core.ProjectGraph` and the CLI serializes it with
 `GraphJson.Options` (camelCase, omitted nulls, compact UTF-8 JSON). The existing
-Core record shapes have not been changed. Consumers must accept unknown
+Core record shapes remain backwards compatible. Consumers must accept unknown
 kind strings and absent optional values.
 
 ## Identity and containment
@@ -213,9 +213,45 @@ does not mean dead code), `interop` (a field of a `[StructLayout]` struct that
 mirrors a native layout) and `handler`. A **handler** is its own member node
 (`subKind: handler`) for a lambda wired to a control — an argument of a call
 that also passes a string literal (`Ui.TextButton("Up", "Наверх", () => …)`) or
-the right side of `x.Click += (…) => …`. Its `Name` is the call plus the
-control's text («TextButton «Up · Наверх»»), its parent is the declaring type,
-its id is the containing member's id + `#h<n>` in source order. Unknown languages omit `Language`. Languages are detected from extensions,
+the right side of `x.Click += (…) => …`. Typed delegate arguments (method groups,
+delegate variables, lambdas) also cover factories with computed string arguments,
+target-typed `new(...)`, timer constructors/helpers and `AddHandler(...Event, ...)`.
+This is a bounded source heuristic, not proof of runtime UI reachability. Its `Name`
+is the call plus the control's text («TextButton «Up · Наверх»»), and its parent
+is the declaring type. Its id remains the containing member's id + `#h<n>`:
+legacy lambda forms keep source order; newly supported forms are appended in
+source order, so adding support does not renumber legacy handlers.
+
+Handler metadata (all optional, graph schema remains 1):
+
+- `Anchor` (JSON `anchor`) is the owner member id + `|` + the declared control
+  name, otherwise the control variable/field name or label. It is independent of
+  the handler ordinal and preserves full text even when `Name` is truncated.
+  Factory name parameters, `Name` initializers and transparent fluent `.Named()`
+  chains supply the name when known. Dynamic names retain their source expression.
+  Several callbacks on the same control can share an anchor: consumers must treat
+  collisions as ambiguous, not silently select one. Renaming the owner/control
+  changes it. Other nodes have null anchors. `WriteAsync`, `Serialize` and
+  `SerializeCompact` retain it; old graphs without it still read; GraphDiff
+  compares it even with `IgnorePositions`.
+- `library-only`: the nonempty callback uses at least one resolved external
+  symbol and no repository symbol. Inherited library calls such as `Close()`
+  qualify; repository fields/methods/types, supplied delegate behavior and
+  unresolved symbols prevent classification. Empty/literal-only bodies do not
+  qualify. Such handlers must not be reported as empty/dead merely because they
+  have no outgoing repository edges (`tools/analysis/reach.py` excludes them from
+  its dead-code candidates and reports their count separately).
+- `not-shown`: a locally constructed control or private field has no use that
+  could attach or expose it. Property setup and event wiring alone do not show
+  a control. Passing it as an argument, assigning it as another object's
+  property/content/child, adding it to a collection/initializer, returning it,
+  aliasing it or any unknown use suppresses the tag. Public fields, properties,
+  parameters, opaque factories and uncertain construction are skipped. Private
+  field uses across partial files are checked on every scan, including incremental
+  body edits. Absence of this tag does not prove visibility; it does not evaluate
+  visibility conditions or whether an ancestor is ever shown.
+
+Unknown languages omit `Language`. Languages are detected from extensions,
 not proof that a language-specific semantic scanner exists.
 
 `Project.ScannedAt` is UTC start time. `ScanMilliseconds` covers scanning,

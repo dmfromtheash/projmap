@@ -61,13 +61,19 @@ dev = reach({n['id'] for n in g['nodes'] if n['kind'] in ('member', 'type')
              and ((n.get('path') or '').startswith(('tests/', 'tools/')) or 'test' in n.get('tags', []))})
 
 src_members = [n for n in g['nodes'] if n['kind'] == 'member' and (n.get('path') or '').startswith('src/')]
-unreached = [n for n in src_members if n['id'] not in app]
+unreached_all = [n for n in src_members if n['id'] not in app]
+# No repository calls is expected for an action such as Window.Close(). These
+# handlers are explicitly classified by the semantic scanner, not dead/empty code.
+library_only = [n for n in unreached_all if n.get('subKind') == 'handler' and 'library-only' in n.get('tags', [])]
+library_only_ids = {n['id'] for n in library_only}
+unreached = [n for n in unreached_all if n['id'] not in library_only_ids]
 by_file = collections.defaultdict(list)
 for n in unreached:
     by_file[n['path']].append({'id': n['id'], 'name': n['name'], 'sub': n.get('subKind'), 'line': n.get('line'),
                                'devOnly': n['id'] in dev})
 report = {
-    'appRoots': len(app_roots), 'srcMembers': len(src_members), 'reached': len(src_members) - len(unreached),
+    'appRoots': len(app_roots), 'srcMembers': len(src_members), 'reached': len(src_members) - len(unreached_all),
+    'libraryOnlyUnreached': len(library_only),
     'unreached': len(unreached), 'unreachedButUsedByTestsOrTools': sum(1 for n in unreached if n['id'] in dev),
     'files': dict(sorted(by_file.items(), key=lambda kv: -len(kv[1]))),
 }
