@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/ProjMap.Analysis/ProjMap.Analysis.csproj" />
+    <Project Path="src/ProjMap.App/ProjMap.App.csproj" />
+    <Project Path="src/ProjMap.Cli/ProjMap.Cli.csproj" />
+    <Project Path="src/ProjMap.Core/ProjMap.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/ProjMap.Tests/ProjMap.Tests.csproj" />
+  </Folder>
+</Solution>
