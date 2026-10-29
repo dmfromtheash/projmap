@@ -16,6 +16,7 @@ public sealed class ScannerTests
         repo.Write("Core/Base.cs", "namespace Sample; public interface IWorker { void Run(); } public record Base { public virtual void Run() {} }");
         repo.Write("Core/Service.cs", "namespace Sample; /// <summary>Useful service.</summary>\npublic class Service { public static void Work() {} }");
         repo.Write("App/App.csproj", Project.Replace("</Project>", "<ItemGroup><ProjectReference Include=\"../Core/Core.csproj\"/><PackageReference Include=\"Unresolved.Package\" Version=\"1.0\"/></ItemGroup></Project>"));
+        repo.Write("App/Window.cs", "namespace Sample; public class Window { public event System.EventHandler<Missing.ClosingArgs>? Closing; public Window() { Closing += OnClosing; } private void OnClosing(object? sender, Missing.ClosingArgs e) {} }");
         repo.Write("App/Worker.cs", "namespace Sample; public record Worker : Base, IWorker { public Worker() {} public int Value { get; set; } public int Visible; private int Secret; public override void Run() { if (Value > 0 && Value < 10) Service.Work(); Service.Work(); } }");
         var before = repo.Snapshot();
         var graph = await ProjectScanner.ScanAsync(new(repo.Root));
@@ -39,6 +40,8 @@ public sealed class ScannerTests
         // A call through IWorker.Run or Base.Run reaches Worker.Run: the member links to the contract it fulfils.
         Assert.Contains(graph.Edges, e => e.Kind == EdgeKinds.Implement && e.Source.EndsWith(":M:Sample.Worker.Run") && e.Target.EndsWith(":M:Sample.IWorker.Run"));
         Assert.Contains(graph.Edges, e => e.Kind == EdgeKinds.Inherit && e.Source.EndsWith(":M:Sample.Worker.Run") && e.Target.EndsWith(":M:Sample.Base.Run"));
+        // A handler subscribed to an event whose argument type comes from a missing library is still referenced.
+        Assert.Contains(graph.Edges, e => e.Kind == EdgeKinds.Reference && e.Source.EndsWith(":M:Sample.Window.#ctor") && e.Target.Contains(":M:Sample.Window.OnClosing("));
         Assert.Contains(graph.Edges, e => e.Kind == EdgeKinds.Reference && e.Source.EndsWith(":M:Sample.Worker.Run") && e.Target.EndsWith(":P:Sample.Worker.Value"));
         Assert.All(graph.Edges, e => Assert.InRange(e.Strength, 0.0, 1.0));
         Assert.Equal(before.OrderBy(p => p.Key), repo.Snapshot().OrderBy(p => p.Key));

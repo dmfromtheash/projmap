@@ -420,6 +420,13 @@ internal sealed class CSharpScanner : IRepositoryScanner
             ObjectCreationExpressionSyntax oc => oc.Type == name,
             _ => false,
         };
+        // When a referenced library is missing (e.g. its types are unresolved), Roslyn may not bind `Event += Handler`
+        // or a call with such an argument, yet it names the only possible target: take that single candidate.
+        ISymbol? Resolve(SyntaxNode site)
+        {
+            var info = model.GetSymbolInfo(site, ct);
+            return info.Symbol ?? (info.CandidateSymbols.Length == 1 ? info.CandidateSymbols[0] : null);
+        }
         // Interface member → its implementation, per implementing type (implicit implementations included).
         var implementedCache = new Dictionary<INamedTypeSymbol, ILookup<ISymbol, ISymbol>>(SymbolEqualityComparer.Default);
         IEnumerable<ISymbol> Implemented(ISymbol member)
@@ -459,13 +466,13 @@ internal sealed class CSharpScanner : IRepositoryScanner
                     Link(b, baseType, baseType?.TypeKind == TypeKind.Interface && declaringType is not InterfaceDeclarationSyntax ? EdgeKinds.Implement : EdgeKinds.Inherit);
                     break;
                 case InvocationExpressionSyntax invocation:
-                    Link(invocation, model.GetSymbolInfo(invocation, ct).Symbol, EdgeKinds.Call); break;
+                    Link(invocation, Resolve(invocation), EdgeKinds.Call); break;
                 case ObjectCreationExpressionSyntax creation:
                     Link(creation, model.GetSymbolInfo(creation, ct).Symbol, EdgeKinds.Call); break;
                 case ImplicitObjectCreationExpressionSyntax creation:
                     Link(creation, model.GetSymbolInfo(creation, ct).Symbol, EdgeKinds.Call); break;
                 case SimpleNameSyntax name when name.Parent is not UsingDirectiveSyntax && !IsCallTarget(name):
-                    Link(name, model.GetSymbolInfo(name, ct).Symbol, EdgeKinds.Reference); break;
+                    Link(name, Resolve(name), EdgeKinds.Reference); break;
             }
         }
         return edges.Values.Select(e => e.ToEdge()).ToList();
