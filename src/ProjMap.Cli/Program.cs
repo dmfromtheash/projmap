@@ -14,11 +14,13 @@ namespace ProjMap.Cli
         {
             try
             {
-                if (args.Length < 2 || args[0] is not ("scan" or "stats"))
+                if (args.Length < 2 || args[0] is not ("scan" or "stats" or "diff"))
                 {
-                    await error.WriteLineAsync("Usage: projmap-cli scan <root> [-o <file>] [--git-months N] [--no-members] [--timings]\n       projmap-cli stats <graph.json>");
+                    await error.WriteLineAsync("Usage: projmap-cli scan <root> [-o <file>] [--git-months N] [--no-members] [--timings]\n       projmap-cli stats <graph.json>\n" +
+                                               "       projmap-cli diff <a.json> <b.json> [--ignore-git] [--ignore-positions] [--limit N] [-o <report.json>]");
                     return 2;
                 }
+                if (args[0] == "diff") return await DiffAsync(args, output, ct);
                 if (args[0] == "stats")
                 {
                     if (args.Length != 2) throw new ArgumentException("stats expects exactly one graph file.");
@@ -53,8 +55,12 @@ namespace ProjMap.Cli
                     }
                 }
                 destination ??= Path.Combine(root, ".projmap", "graph.json");
-                var graphResult = await ProjectScanner.ScanAsync(new(root) { GitMonths = months, IncludeMembers = members,
-                    Progress = new InlineProgress(p => error.WriteLine($"[{p.Fraction:P0}] {p.Stage} {p.Detail}")) }, ct);
+                var graphResult = await ProjectScanner.ScanAsync(new(root)
+                {
+                    GitMonths = months,
+                    IncludeMembers = members,
+                    Progress = new InlineProgress(p => error.WriteLine($"[{p.Fraction:P0}] {p.Stage} {p.Detail}"))
+                }, ct);
                 Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
                 await using (var stream = new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.None, 65536, useAsync: true))
                     await GraphJson.WriteAsync(graphResult, stream, ct);
@@ -70,6 +76,49 @@ namespace ProjMap.Cli
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { await error.WriteLineAsync("Scan cancelled."); return 130; }
             catch (Exception ex) { await error.WriteLineAsync("Error: " + ex.Message); return 1; }
+        }
+        /// <summary>Exit code 0 when both scans hold the same project content, 3 when they differ.</summary>
+        static async Task<int> DiffAsync(string[] args, TextWriter output, CancellationToken ct)
+        {
+            if (args.Length < 3) throw new ArgumentException("diff expects two graph files.");
+            var options = new GraphDiffOptions(); var limit = 40; string? report = null;
+            for (var i = 3; i < args.Length; i++)
+            {
+                switch (args[i])
+                {
+                    case "--ignore-git": options = options with { IgnoreGit = true }; break;
+                    case "--ignore-positions": options = options with { IgnorePositions = true }; break;
+                    case "--limit" when i + 1 < args.Length:
+                        if (!int.TryParse(args[++i], NumberStyles.None, CultureInfo.InvariantCulture, out limit))
+                            throw new ArgumentException("--limit must be a non-negative integer.");
+                        break;
+                    case "-o" when i + 1 < args.Length: report = Path.GetFullPath(args[++i]); break;
+                    default: throw new ArgumentException("Unknown or incomplete option: " + args[i]);
+                }
+            }
+            async Task<ProjectGraph> Load(string path) =>
+                GraphJson.Deserialize(await File.ReadAllTextAsync(path, ct)) ?? throw new InvalidDataException("Empty graph JSON: " + path);
+            var a = await Load(args[1]); var b = await Load(args[2]);
+            var diff = GraphDiff.Compare(a, b, options);
+            await output.WriteLineAsync($"A: {a.Project.Root} ({a.Project.GitBranch ?? "-"} {a.Project.GitHead?[..Math.Min(7, a.Project.GitHead.Length)] ?? "-"})");
+            await output.WriteLineAsync($"B: {b.Project.Root} ({b.Project.GitBranch ?? "-"} {b.Project.GitHead?[..Math.Min(7, b.Project.GitHead.Length)] ?? "-"})");
+            foreach (var (name, section) in new[] { ("Nodes", diff.Nodes), ("Edges", diff.Edges), ("Roadmap", diff.Roadmap), ("Database", diff.Database) })
+            {
+                await output.WriteLineAsync($"{name}: only in A {section.OnlyInA.Count}, only in B {section.OnlyInB.Count}, changed {section.Changed.Count}");
+                foreach (var (label, ids) in new[] { ("only in A", section.OnlyInA), ("only in B", section.OnlyInB), ("changed", section.Changed) })
+                {
+                    foreach (var id in ids.Take(limit)) await output.WriteLineAsync($"  {label}: {id}");
+                    if (ids.Count > limit) await output.WriteLineAsync($"  {label}: ... {ids.Count - limit} more");
+                }
+            }
+            await output.WriteLineAsync(diff.Identical ? "IDENTICAL" : "DIFFERENT");
+            if (report is not null)
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(report)!);
+                await File.WriteAllTextAsync(report, System.Text.Json.JsonSerializer.Serialize(diff,
+                    new System.Text.Json.JsonSerializerOptions { WriteIndented = true, PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase }), ct);
+            }
+            return diff.Identical ? 0 : 3;
         }
         private sealed class InlineProgress(Action<ScanProgress> report) : IProgress<ScanProgress>
         { public void Report(ScanProgress value) => report(value); }

@@ -36,6 +36,9 @@ public sealed class ScannerTests
         Assert.DoesNotContain(graph.Edges, e => e.Source == "file:App/Worker.cs" && e.Target == "file:Core/Service.cs");
         // function level: Worker.Run() calls Service.Work() twice; the property read stays inside Worker
         Assert.Contains(graph.Edges, e => e.Kind == EdgeKinds.Call && e.Source.EndsWith(":M:Sample.Worker.Run") && e.Target.EndsWith(":M:Sample.Service.Work") && e.Weight == 2);
+        // A call through IWorker.Run or Base.Run reaches Worker.Run: the member links to the contract it fulfils.
+        Assert.Contains(graph.Edges, e => e.Kind == EdgeKinds.Implement && e.Source.EndsWith(":M:Sample.Worker.Run") && e.Target.EndsWith(":M:Sample.IWorker.Run"));
+        Assert.Contains(graph.Edges, e => e.Kind == EdgeKinds.Inherit && e.Source.EndsWith(":M:Sample.Worker.Run") && e.Target.EndsWith(":M:Sample.Base.Run"));
         Assert.Contains(graph.Edges, e => e.Kind == EdgeKinds.Reference && e.Source.EndsWith(":M:Sample.Worker.Run") && e.Target.EndsWith(":P:Sample.Worker.Value"));
         Assert.All(graph.Edges, e => Assert.InRange(e.Strength, 0.0, 1.0));
         Assert.Equal(before.OrderBy(p => p.Key), repo.Snapshot().OrderBy(p => p.Key));

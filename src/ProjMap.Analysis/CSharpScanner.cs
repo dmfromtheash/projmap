@@ -87,65 +87,65 @@ internal sealed class CSharpScanner : IRepositoryScanner
         if (filesByModule["system:root"].Any()) modules.Add(new("system:root", c.Graph.Project.Name, "", "", "C#"));
         int parsed = 0, reused = 0;
         using (c.Measure("csharp.parse"))
-        await Parallel.ForEachAsync(modules, parallel, (module, token) =>
-        {
-            try
+            await Parallel.ForEachAsync(modules, parallel, (module, token) =>
             {
-                var configuration = string.Join('\n', module.Id, module.ImplicitUsings, string.Join(';', module.Defines),
-                    string.Join(';', module.References), string.Join(';', c.Graph.Nodes[module.Id].Tags));
-                var old = previous?.Units.GetValueOrDefault(module.Id);
-                if (old?.Configuration != configuration) old = null;
-                var results = old == null ? new Dictionary<string, FileAnalysis>(StringComparer.Ordinal) : new(old.Results, StringComparer.Ordinal);
-                var trees = new List<SyntaxTree>();
-                var compilation = old?.Compilation;
-                var surfaceChanged = old == null;
-                var parseOptions = new CSharpParseOptions(LanguageVersion.Preview, preprocessorSymbols: module.Defines);
-                foreach (var file in filesByModule[module.Id].OrderBy(f => f.Path, StringComparer.Ordinal))
+                try
                 {
-                    token.ThrowIfCancellationRequested();
-                    if (file.Text(c) is not { } text) continue;
-                    var hash = c.State.Hashes[file.Path];
-                    var cached = results.GetValueOrDefault(file.Path);
-                    SyntaxTree tree;
-                    if (cached != null && cached.Hash == hash && !c.ForcedPaths.Contains(file.Path)) tree = cached.Tree;
-                    else
+                    var configuration = string.Join('\n', module.Id, module.ImplicitUsings, string.Join(';', module.Defines),
+                        string.Join(';', module.References), string.Join(';', c.Graph.Nodes[module.Id].Tags));
+                    var old = previous?.Units.GetValueOrDefault(module.Id);
+                    if (old?.Configuration != configuration) old = null;
+                    var results = old == null ? new Dictionary<string, FileAnalysis>(StringComparer.Ordinal) : new(old.Results, StringComparer.Ordinal);
+                    var trees = new List<SyntaxTree>();
+                    var compilation = old?.Compilation;
+                    var surfaceChanged = old == null;
+                    var parseOptions = new CSharpParseOptions(LanguageVersion.Preview, preprocessorSymbols: module.Defines);
+                    foreach (var file in filesByModule[module.Id].OrderBy(f => f.Path, StringComparer.Ordinal))
                     {
-                        tree = CSharpSyntaxTree.ParseText(text, parseOptions, file.Path, cancellationToken: token);
-                        Interlocked.Increment(ref parsed);
-                        if (cached != null)
+                        token.ThrowIfCancellationRequested();
+                        if (file.Text(c) is not { } text) continue;
+                        var hash = c.State.Hashes[file.Path];
+                        var cached = results.GetValueOrDefault(file.Path);
+                        SyntaxTree tree;
+                        if (cached != null && cached.Hash == hash && !c.ForcedPaths.Contains(file.Path)) tree = cached.Tree;
+                        else
                         {
-                            compilation = compilation!.ReplaceSyntaxTree(cached.Tree, tree);
-                            if (cached.Hash != hash && (!new DeclarationSurface().Visit(cached.Tree.GetRoot(token))!.IsEquivalentTo(
-                                new DeclarationSurface().Visit(tree.GetRoot(token))) ||
-                                !SharedTrivia(cached.Tree, token).SequenceEqual(SharedTrivia(tree, token)))) surfaceChanged = true;
+                            tree = CSharpSyntaxTree.ParseText(text, parseOptions, file.Path, cancellationToken: token);
+                            Interlocked.Increment(ref parsed);
+                            if (cached != null)
+                            {
+                                compilation = compilation!.ReplaceSyntaxTree(cached.Tree, tree);
+                                if (cached.Hash != hash && (!new DeclarationSurface().Visit(cached.Tree.GetRoot(token))!.IsEquivalentTo(
+                                    new DeclarationSurface().Visit(tree.GetRoot(token))) ||
+                                    !SharedTrivia(cached.Tree, token).SequenceEqual(SharedTrivia(tree, token)))) surfaceChanged = true;
+                            }
+                            else { compilation = compilation?.AddSyntaxTrees(tree); surfaceChanged = true; }
+                            results.Remove(file.Path);
                         }
-                        else { compilation = compilation?.AddSyntaxTrees(tree); surfaceChanged = true; }
-                        results.Remove(file.Path);
+                        trees.Add(tree);
                     }
-                    trees.Add(tree);
+                    var currentPaths = trees.Select(t => t.FilePath).ToHashSet(StringComparer.Ordinal);
+                    foreach (var removed in results.Keys.Where(path => !currentPaths.Contains(path)).ToArray())
+                    {
+                        compilation = compilation!.RemoveSyntaxTrees(results[removed].Tree);
+                        results.Remove(removed);
+                        surfaceChanged = true;
+                    }
+                    if (compilation == null)
+                    {
+                        var allTrees = new List<SyntaxTree>(trees);
+                        if (module.ImplicitUsings) allTrees.Add(CSharpSyntaxTree.ParseText("global using System; global using System.Collections.Generic; global using System.Linq; global using System.Threading; global using System.Threading.Tasks; global using System.IO; global using System.Net.Http;", parseOptions));
+                        var assembly = "scan_" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(module.Id)))[..16];
+                        compilation = CSharpCompilation.Create(assembly, allTrees, Framework.Value,
+                            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, allowUnsafe: true));
+                    }
+                    else Interlocked.Increment(ref reused);
+                    if (surfaceChanged) invalidated[module.Id] = 0;
+                    units[module.Id] = new(module, compilation, trees, results, configuration);
                 }
-                var currentPaths = trees.Select(t => t.FilePath).ToHashSet(StringComparer.Ordinal);
-                foreach (var removed in results.Keys.Where(path => !currentPaths.Contains(path)).ToArray())
-                {
-                    compilation = compilation!.RemoveSyntaxTrees(results[removed].Tree);
-                    results.Remove(removed);
-                    surfaceChanged = true;
-                }
-                if (compilation == null)
-                {
-                    var allTrees = new List<SyntaxTree>(trees);
-                    if (module.ImplicitUsings) allTrees.Add(CSharpSyntaxTree.ParseText("global using System; global using System.Collections.Generic; global using System.Linq; global using System.Threading; global using System.Threading.Tasks; global using System.IO; global using System.Net.Http;", parseOptions));
-                    var assembly = "scan_" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(module.Id)))[..16];
-                    compilation = CSharpCompilation.Create(assembly, allTrees, Framework.Value,
-                        new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, allowUnsafe: true));
-                }
-                else Interlocked.Increment(ref reused);
-                if (surfaceChanged) invalidated[module.Id] = 0;
-                units[module.Id] = new(module, compilation, trees, results, configuration);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException) { c.Warn(Name, ex.Message, module.Manifest); }
-            return ValueTask.CompletedTask;
-        });
+                catch (Exception ex) when (ex is not OperationCanceledException) { c.Warn(Name, ex.Message, module.Manifest); }
+                return ValueTask.CompletedTask;
+            });
         var pending = units.Keys.ToHashSet(StringComparer.Ordinal);
         var done = new HashSet<string>(StringComparer.Ordinal);
         while (pending.Count > 0)
@@ -195,14 +195,14 @@ internal sealed class CSharpScanner : IRepositoryScanner
                 });
         }
         using (c.Measure("csharp.walk"))
-        await Parallel.ForEachAsync(work, parallel, (item, token) =>
-        {
-            token.ThrowIfCancellationRequested();
-            try { item.Unit.Results[item.Tree.FilePath].Edges = Connect(c, item.Unit, item.Tree, types, token); }
-            catch (Exception ex) when (ex is not OperationCanceledException) { c.Warn(Name, ex.Message, item.Tree.FilePath); }
-            finally { item.Unit.ReleaseModel(item.Tree); }
-            return ValueTask.CompletedTask;
-        });
+            await Parallel.ForEachAsync(work, parallel, (item, token) =>
+            {
+                token.ThrowIfCancellationRequested();
+                try { item.Unit.Results[item.Tree.FilePath].Edges = Connect(c, item.Unit, item.Tree, types, token); }
+                catch (Exception ex) when (ex is not OperationCanceledException) { c.Warn(Name, ex.Message, item.Tree.FilePath); }
+                finally { item.Unit.ReleaseModel(item.Tree); }
+                return ValueTask.CompletedTask;
+            });
         foreach (var unit in units.Values.OrderBy(u => u.Module.Id, StringComparer.Ordinal))
             foreach (var result in unit.Results.Values.OrderBy(r => r.Tree.FilePath, StringComparer.Ordinal))
                 foreach (var edge in result.Edges) c.Merge(edge);
@@ -295,7 +295,7 @@ internal sealed class CSharpScanner : IRepositoryScanner
                 });
             }
             if (root.DescendantNodes().OfType<GlobalStatementSyntax>().Any() && !file.Tags.Contains("entrypoint"))
-                { result.FileTags = [.. file.Tags, "entrypoint"]; ApplyTags(c, result); }
+            { result.FileTags = [.. file.Tags, "entrypoint"]; ApplyTags(c, result); }
             return;
         }
         if (!c.Options.IncludeMembers) return;
@@ -420,11 +420,39 @@ internal sealed class CSharpScanner : IRepositoryScanner
             ObjectCreationExpressionSyntax oc => oc.Type == name,
             _ => false,
         };
+        // Interface member → its implementation, per implementing type (implicit implementations included).
+        var implementedCache = new Dictionary<INamedTypeSymbol, ILookup<ISymbol, ISymbol>>(SymbolEqualityComparer.Default);
+        IEnumerable<ISymbol> Implemented(ISymbol member)
+        {
+            var type = member.ContainingType;
+            if (!implementedCache.TryGetValue(type, out var lookup))
+                implementedCache[type] = lookup = type.AllInterfaces.SelectMany(i => i.GetMembers())
+                    .Select(m => (Interface: m, Impl: type.FindImplementationForInterfaceMember(m)))
+                    .Where(p => p.Impl is not null && SymbolEqualityComparer.Default.Equals(p.Impl.ContainingType, type))
+                    .ToLookup(p => p.Impl!, p => p.Interface, SymbolEqualityComparer.Default);
+            return lookup[member];
+        }
         foreach (var node in root.DescendantNodes())
         {
             ct.ThrowIfCancellationRequested();
             switch (node)
             {
+                // A call through an interface or a base class reaches this member too: link the member to what it
+                // implements or overrides, so callers of the contract lead to the code that actually runs.
+                case BaseMethodDeclarationSyntax or PropertyDeclarationSyntax or IndexerDeclarationSyntax or EventDeclarationSyntax:
+                    if (model.GetDeclaredSymbol(node, ct) is { ContainingType: { } } declared)
+                    {
+                        foreach (var contract in Implemented(declared)) Link(node, contract, EdgeKinds.Implement);
+                        var overridden = declared switch
+                        {
+                            IMethodSymbol m => m.OverriddenMethod as ISymbol,
+                            IPropertySymbol p => p.OverriddenProperty,
+                            IEventSymbol e => e.OverriddenEvent,
+                            _ => null,
+                        };
+                        if (overridden is not null) Link(node, overridden, EdgeKinds.Inherit);
+                    }
+                    break;
                 case SimpleBaseTypeSyntax b:
                     var baseType = model.GetTypeInfo(b.Type, ct).Type as INamedTypeSymbol;
                     var declaringType = b.Ancestors().OfType<TypeDeclarationSyntax>().FirstOrDefault();
@@ -458,7 +486,14 @@ internal sealed class CSharpScanner : IRepositoryScanner
             evidence.Insert(index, location);
             if (evidence.Count > 3) evidence.RemoveAt(3);
         }
-        public Edge ToEdge() => new() { Id = $"{kind}:{source}->{target}", Kind = kind, Source = source,
-            Target = target, Weight = weight, Evidence = evidence };
+        public Edge ToEdge() => new()
+        {
+            Id = $"{kind}:{source}->{target}",
+            Kind = kind,
+            Source = source,
+            Target = target,
+            Weight = weight,
+            Evidence = evidence
+        };
     }
 }
