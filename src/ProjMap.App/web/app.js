@@ -570,7 +570,8 @@ async function swapIn(els, seq, fit) {
     ...els.filter(e => e.group === 'edges'),
   ];
   const frame = () => new Promise(r => requestAnimationFrame(() => setTimeout(r, 0))); // after the frame is drawn
-  let size = 120, i = 0;
+  // the first part is small: it may be all SVG cards (the plan), whose first draw is the costliest
+  let size = 50, i = 0;
   while (i < order.length) {
     const part = order.slice(i, i + size), t0 = performance.now();
     cy.batch(() => {
