@@ -7,8 +7,9 @@ $repo = Split-Path $PSScriptRoot -Parent
 $version = ([xml](Get-Content (Join-Path $repo 'src\ProjMap.App\ProjMap.App.csproj'))).Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
 $stage = Join-Path $Out "projmap-$version-win-x64"
 if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
-$common = @('-c', 'Release', '-r', 'win-x64', '--self-contained', 'true', '-p:PublishSingleFile=true',
-            '-p:IncludeNativeLibrariesForSelfExtract=true', '-p:EnableCompressionInSingleFile=true', '-p:DebugType=none',
+# Not single-file: the C# analyzer reads .NET reference assemblies as real files next to the exe; inside a
+# single-file bundle they have no path and C# links are lost (Map: 109,690 instead of 127,031 edges).
+$common = @('-c', 'Release', '-r', 'win-x64', '--self-contained', 'true', '-p:DebugType=none',
             '-o', $stage, '--nologo', '-v', 'q')
 dotnet publish (Join-Path $repo 'src\ProjMap.App\ProjMap.App.csproj') @common
 if ($LASTEXITCODE) { throw 'publish ProjMap.App failed' }
