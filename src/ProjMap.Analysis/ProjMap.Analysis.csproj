@@ -2,6 +2,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\ProjMap.Core\ProjMap.Core.csproj" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.13" />
   </ItemGroup>
 
   <PropertyGroup>

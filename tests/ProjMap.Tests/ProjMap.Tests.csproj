@@ -20,6 +20,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\ProjMap.Analysis\ProjMap.Analysis.csproj" />
+    <ProjectReference Include="..\..\src\ProjMap.Cli\ProjMap.Cli.csproj" />
   </ItemGroup>
 
 </Project>

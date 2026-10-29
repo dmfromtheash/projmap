@@ -162,5 +162,35 @@ public static class GraphJson
     };
 
     public static string Serialize(ProjectGraph g) => JsonSerializer.Serialize(g, Options);
+
+    /// Viewer format: same document, but each edge is [kindIndex, source, target, weight, evidence?]
+    /// where source/target are indexes into `nodes` (or the id itself for non-node ends such as
+    /// roadmap items) and evidence is [[path, line, snippet], …]. With function-level edges this is
+    /// ~4× smaller than the plain form, whose edge ids repeat long member signatures three times.
+    public static byte[] SerializeCompact(ProjectGraph g)
+    {
+        var index = new Dictionary<string, int>(g.Nodes.Count, StringComparer.Ordinal);
+        for (var i = 0; i < g.Nodes.Count; i++) index[g.Nodes[i].Id] = i;
+        var kinds = g.Edges.Select(e => e.Kind).Distinct().ToList();
+        var kindIndex = kinds.Select((k, i) => (k, i)).ToDictionary(x => x.k, x => x.i);
+        object Ref(string id) => index.TryGetValue(id, out var i) ? i : id;
+        var edges = g.Edges.Select(e => e.Evidence.Count == 0
+            ? new object[] { kindIndex[e.Kind], Ref(e.Source), Ref(e.Target), e.Weight }
+            : new object[] { kindIndex[e.Kind], Ref(e.Source), Ref(e.Target), e.Weight,
+                e.Evidence.Select(v => new object?[] { v.Path, v.Line, v.Snippet }).ToList() });
+        var doc = new
+        {
+            schemaVersion = g.SchemaVersion,
+            compact = 1,
+            project = g.Project,
+            nodes = g.Nodes,
+            edgeKinds = kinds,
+            edges,
+            roadmap = g.Roadmap,
+            database = g.Database,
+            warnings = g.Warnings,
+        };
+        return JsonSerializer.SerializeToUtf8Bytes(doc, Options);
+    }
     public static ProjectGraph? Deserialize(string json) => JsonSerializer.Deserialize<ProjectGraph>(json, Options);
 }
