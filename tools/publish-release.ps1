@@ -14,6 +14,7 @@ dotnet publish (Join-Path $repo 'src\ProjMap.App\ProjMap.App.csproj') @common
 if ($LASTEXITCODE) { throw 'publish ProjMap.App failed' }
 dotnet publish (Join-Path $repo 'src\ProjMap.Cli\ProjMap.Cli.csproj') @common
 if ($LASTEXITCODE) { throw 'publish ProjMap.Cli failed' }
+Get-ChildItem $stage -Filter *.xml | Remove-Item -Force  # API reference docs of the WebView2 package, not needed to run
 Copy-Item (Join-Path $repo 'README.md') $stage
 $zip = "$stage.zip"
 if (Test-Path $zip) { Remove-Item -Force $zip }
