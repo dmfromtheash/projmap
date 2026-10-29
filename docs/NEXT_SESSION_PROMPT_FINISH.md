@@ -16,7 +16,7 @@
 (дифф, сборка, тесты, числа), что исправил — пиши «с чем не согласен».
 
 ## Состояние на конец 2026-10-29 — проверь сам
-- **Map** `C:\Projects\Map`, ветка `codex/stage-18-editable-areas`, HEAD `440ab42` = `origin/main`, CI зелёный.
+- **Map** `C:\Projects\Map`, ветка `codex/stage-18-editable-areas`, HEAD `6f7c139` = `origin/main` (код — `440ab42`, CI зелёный).
   За день: `92214c5` Ctrl+K и защита ошибок (UiTasks, сохранение), `d16e99b` понятные имена 8 файлов и инструментов проверки.
   Все 5 тестовых проектов 2446/2446. Копия владельца `C:\Users\Leshe\Apps\Map` **не обновлялась** (его Map была открыта).
 - **projmap** `C:\Projects\projmap`, ветка `feat/projmap-v1` = `origin/main` на **публичном** github.com/dmfromtheash/projmap,
