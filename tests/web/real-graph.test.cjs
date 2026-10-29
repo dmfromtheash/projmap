@@ -15,12 +15,19 @@ const map = (name, fn) => test(`Map: ${name}`, { skip: !mapPath && 'Set PROJMAP_
 
 map('scan totals and complete indexes', t => {
   const nodes = model.canonicalIds.size, edges = model.allEdges.length;
-  t.diagnostic(`${nodes} nodes, ${edges} edges, ${graph.warnings.length} warnings; historical edge baseline 127031`);
-  assert.equal(nodes, 20333); assert.ok(edges >= 127031); assert.equal(graph.warnings.length, 0);
-  // Compare technical kinds with the recorded steps 1-3 baseline; documentation mentions can grow.
-  const expected = { call: 36242, cochange: 231, dbRead: 4, dbWrite: 4, implement: 1110,
-    inherit: 31, import: 0, package: 35, projectRef: 40, reference: 82701, xamlEvent: 0, binding: 0 };
-  for (const [kind, count] of Object.entries(expected)) assert.equal(model.edgesByKind.get(kind)?.length || 0, count, kind);
+  t.diagnostic(`${nodes} nodes, ${edges} edges, ${graph.warnings.length} warnings`);
+  // Map itself keeps changing, so the scan is compared with itself, not with one historical snapshot:
+  // every node and edge of graph.json must be reachable through the model indexes.
+  assert.equal(graph.warnings.length, 0);
+  // The model adds a viewer-only folder for loose root files to graph.nodes; compare with the file as scanned.
+  const raw = JSON.parse(fs.readFileSync(mapPath, 'utf8'));
+  assert.equal(nodes, new Set(raw.nodes.map(n => n.id)).size);
+  assert.equal(edges, raw.edges.length);
+  for (const kind of ['call', 'reference', 'implement', 'projectRef', 'cochange'])
+    assert.ok((model.edgesByKind.get(kind)?.length || 0) > 0, kind);
+  const byKind = new Map();
+  for (const e of graph.edges) byKind.set(e.kind, (byKind.get(e.kind) || 0) + 1);
+  for (const [kind, count] of byKind) assert.equal(model.edgesByKind.get(kind)?.length || 0, count, kind);
   for (const kind of new Set(graph.edges.map(e => e.kind))) assert.ok(model.edgesByKind.has(kind));
   for (const [name, indexes] of Object.entries(graph.views.explanations.nameIndex)) {
     for (const index of indexes) assert.ok(model.nameIndex.get(name.toLowerCase()).has(graph.views.explanations.nodes[index].nodeId));
