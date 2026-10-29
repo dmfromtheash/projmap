@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using System.Text.RegularExpressions;
 using ProjMap.Core;
 
@@ -101,7 +101,7 @@ internal sealed class ViewsScanner : IRepositoryScanner
         [Tiers.Domain] = "domain core model models entities documents document geometry editing rules logic engine",
         [Tiers.Data] = "persistence storage repositories repository data db database migrations store stores serialization io schema prisma assets resources",
         [Tiers.Backend] = "api server routes controllers endpoints bot middleware hubs backend gateway",
-        [Tiers.Infrastructure] = "infrastructure rendering render renderer platform interop native tools scripts build ci perf benchmarks lib",
+        [Tiers.Infrastructure] = "infrastructure infra deploy docker ops rendering render renderer platform interop native tools scripts build ci perf benchmarks lib",
         [Tiers.Tests] = "tests test specs spec __tests__ e2e",
         [Tiers.Docs] = "docs doc documentation",
     });
@@ -396,7 +396,7 @@ internal sealed class ViewsScanner : IRepositoryScanner
          "get set new old the and for with from into part parts tool tools script scripts perf benchmark sample samples program " +
          "render renderer rendering presentation persistence platform windows window views controls models services kind kinds " +
          "builder builders writer reader json xml text string value values helper source sources output input file files " +
-         "edit editing project object unit native smoke generator set sets structure model resource resources budget node nodes").Split(' '),
+         "edit editing project object unit native smoke generator set sets structure model resource resources budget node nodes name names").Split(' '),
         StringComparer.Ordinal);
     static readonly HashSet<string> NonProduct = new(["tools", "scripts", "experiments", "samples", "examples", "benchmarks", "perf", "docs", ".github"], StringComparer.OrdinalIgnoreCase);
     const int MaxFeatures = 24;
@@ -476,7 +476,9 @@ internal sealed class ViewsScanner : IRepositoryScanner
         ["decoration"] = "Украшения",
         ["material"] = "Материалы",
         ["isometric"] = "Изометрия",
-        ["night"] = "Ночь",
+        ["night"] = "Ночь", ["audit"] = "Аудит", ["hub"] = "Хаб", ["authz"] = "Права доступа", ["activity"] = "Активность",
+        ["visibility"] = "Видимость", ["access"] = "Доступ", ["dashboard"] = "Панель", ["post"] = "Посты", ["reconcile"] = "Сверка",
+        ["role"] = "Роли", ["discord"] = "Discord", ["member"] = "Участники", ["channel"] = "Каналы", ["ticket"] = "Тикеты",
         ["fire"] = "Огонь",
         ["water"] = "Вода",
         ["shore"] = "Берега",
