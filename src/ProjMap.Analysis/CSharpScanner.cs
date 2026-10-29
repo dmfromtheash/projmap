@@ -367,6 +367,8 @@ internal sealed class CSharpScanner : IRepositoryScanner
             var parent = "type:" + u.Module.Id + ":" + Fqn(symbol.ContainingType);
             if (!c.Graph.Nodes.ContainsKey(parent)) continue;
             var signature = symbol.GetDocumentationCommentId() ?? symbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+            // Fields of a [StructLayout] struct mirror a native layout: Windows fills them, code may never read them all.
+            var native = symbol.ContainingType.GetAttributes().Any(a => a.AttributeClass?.Name == "StructLayoutAttribute");
             Add(new Node
             {
                 Id = "member:" + u.Module.Id + ":" + signature,
@@ -378,7 +380,7 @@ internal sealed class CSharpScanner : IRepositoryScanner
                 Line = Line(declaration),
                 Language = "C#",
                 Summary = Summary(symbol, ct),
-                Tags = file.Tags,
+                Tags = native ? [.. file.Tags, "interop"] : file.Tags,
                 Metrics = new() { Members = 1 }
             });
         }

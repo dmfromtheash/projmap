@@ -16,7 +16,7 @@ public sealed class ScannerTests
         repo.Write("Core/Base.cs", "namespace Sample; public interface IWorker { void Run(); } public record Base { public virtual void Run() {} }");
         repo.Write("Core/Service.cs", "namespace Sample; /// <summary>Useful service.</summary>\npublic class Service { public static void Work() {} }");
         repo.Write("App/App.csproj", Project.Replace("</Project>", "<ItemGroup><ProjectReference Include=\"../Core/Core.csproj\"/><PackageReference Include=\"Unresolved.Package\" Version=\"1.0\"/></ItemGroup></Project>"));
-        repo.Write("App/Window.cs", "namespace Sample; public class Window { public event System.EventHandler<Missing.ClosingArgs>? Closing; public Window() { Closing += OnClosing; } private void OnClosing(object? sender, Missing.ClosingArgs e) {} public override string ToString() => \"w\"; } public sealed class Lease : System.IDisposable { public void Dispose() {} public void Use() {} }");
+        repo.Write("App/Window.cs", "namespace Sample; public class Window { public event System.EventHandler<Missing.ClosingArgs>? Closing; public Window() { Closing += OnClosing; } private void OnClosing(object? sender, Missing.ClosingArgs e) {} public override string ToString() => \"w\"; } public sealed class Lease : System.IDisposable { public void Dispose() {} public void Use() {} } [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)] public struct Native { public uint Size, Flags; }");
         repo.Write("App/Worker.cs", "namespace Sample; public record Worker : Base, IWorker { public Worker() {} public int Value { get; set; } public int Visible; private int Secret; public override void Run() { if (Value > 0 && Value < 10) Service.Work(); Service.Work(); } }");
         var before = repo.Snapshot();
         var graph = await ProjectScanner.ScanAsync(new(repo.Root));
@@ -45,6 +45,8 @@ public sealed class ScannerTests
         Assert.Contains("callback", Assert.Single(graph.Nodes, n => n.Id.EndsWith(":M:Sample.Lease.Dispose")).Tags);
         Assert.DoesNotContain("callback", Assert.Single(graph.Nodes, n => n.Id.EndsWith(":M:Sample.Lease.Use")).Tags);
         Assert.DoesNotContain("callback", run.Tags); // overrides Base.Run from this repository
+        Assert.Contains("interop", Assert.Single(graph.Nodes, n => n.Id.EndsWith(":F:Sample.Native.Flags")).Tags);
+        Assert.DoesNotContain("interop", Assert.Single(graph.Nodes, n => n.Kind == NodeKinds.Member && n.Name == "Visible").Tags);
         // A handler subscribed to an event whose argument type comes from a missing library is still referenced.
         Assert.Contains(graph.Edges, e => e.Kind == EdgeKinds.Reference && e.Source.EndsWith(":M:Sample.Window.#ctor") && e.Target.Contains(":M:Sample.Window.OnClosing("));
         Assert.Contains(graph.Edges, e => e.Kind == EdgeKinds.Reference && e.Source.EndsWith(":M:Sample.Worker.Run") && e.Target.EndsWith(":P:Sample.Worker.Value"));
