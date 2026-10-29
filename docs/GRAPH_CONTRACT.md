@@ -2,7 +2,7 @@
 
 The analyzer returns `ProjMap.Core.ProjectGraph` and the CLI serializes it with
 `GraphJson.Options` (camelCase, omitted nulls, compact UTF-8 JSON). The existing
-Core records and constants have not been changed. Consumers must accept unknown
+Core record shapes have not been changed. Consumers must accept unknown
 kind strings and absent optional values.
 
 ## Identity and containment
@@ -133,6 +133,65 @@ Strength(edge) = Weight(edge) / max(Weight of every emitted edge of its kind)
 Strength is therefore in `(0,1]`; it is relative to this scan and must not be
 interpreted as semantic certainty or the Jaccard threshold itself. Raw weights
 should be used for comparisons across scans.
+
+## XAML markup edges
+
+After C# declarations are available, `.axaml` and `.xaml` files are parsed with
+`System.Xml.Linq`. XAML 2006 and 2009 namespace URIs are recognized (including
+MAUI's `x:Class`/`x:DataType`). Each resolved observation contributes weight 1, using the
+normal edge id, evidence, aggregation and strength rules:
+
+| Kind | Endpoints | Meaning |
+| --- | --- | --- |
+| `reference` | XAML file → C# type | Root `x:Class` names an existing code-behind type. |
+| `xamlEvent` | XAML file → C# method | A known event attribute names one unambiguous method declared on the `x:Class` type, including its partial declarations. |
+| `binding` | XAML file → C# property/non-private field | A `Command` binding names an existing member on a statically identified data-context type. |
+
+`xamlEvent` distinguishes markup subscriptions from C# references/calls and
+synthetic code-created handler nodes. Its target keeps subkind `method` and gains
+tags `callback` and `xaml-handler`. Evidence includes the element local type,
+`x:Name`/`Name` when present, the attribute text and its 1-based line. No control
+nodes or general-purpose metadata fields are added.
+
+Events require a bounded, ordinal, case-sensitive known-name list (for example
+`Click`, `Tapped`, `PointerPressed`, `Loaded`, `KeyDown`, `SelectionChanged`) and
+a plain C# identifier value matching exactly one method. Arbitrary properties,
+unknown events, missing methods and overloaded methods are skipped. This is a
+heuristic without framework event/signature validation; custom/attached events
+and inherited methods are not resolved.
+
+Command forms are `{Binding X}`, `{Binding Path=X}`, `{CompiledBinding X}` and
+`{x:Bind X}`, including simple comma-separated options. Only a single direct
+member identifier is resolved. Dotted/indexed paths, nested extensions and
+explicit `Source`, `RelativeSource` or `ElementName` are skipped. For this
+lightweight analysis all four forms use the explicitly typed context; WinUI's
+implicit code-behind source for `x:Bind` is not inferred.
+
+The nearest ancestor-or-self `x:DataType` identifies the context. Alternatively,
+`d:DataContext="{x:Type vm:Foo}"` or
+`d:DataContext="{d:DesignInstance Type=vm:Foo, ...}"` (also positional `vm:Foo`)
+provides a design-time hint. Prefixes are resolved by XML namespace URI, not by
+their spelling: `using:Ns` and `clr-namespace:Ns;assembly=Name` identify C#
+namespaces. Assembly suffixes are not evaluated. Type lookup prefers an exact
+fully qualified name in the file's module, otherwise requires a unique graph
+type with that name. Ambiguous types are skipped. An explicit unknown/null
+`x:DataType` or a runtime `DataContext` attribute/property element blocks
+inference from more distant ancestors. Runtime context assignments, property
+element design contexts, templates without explicit types, inheritance and
+generated command properties absent from the graph are not inferred.
+
+Unresolved bindings are **skipped**, without placeholder nodes, dangling targets
+or warnings: missing runtime context is ordinary markup, and Core has no
+dedicated unresolved-binding metadata field. `IncludeMembers=false` still
+permits `x:Class` references but suppresses event/binding edges. Malformed XML
+produces one `xaml` warning for that file and no markup edges from it; other
+files continue. DTDs and external entities are prohibited.
+
+XAML runs after C# on every full or incremental scan, including when C# nodes
+are reused. This refreshes edges and handler tags after markup edits/deletions
+or C# declaration changes. Files, candidate types and added tags use ordinal
+ordering; output is deterministic apart from existing volatile scan timestamp
+and timing diagnostics.
 
 ## Metrics, metadata and failure behavior
 
