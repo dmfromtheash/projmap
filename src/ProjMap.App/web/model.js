@@ -20,6 +20,9 @@ const KIND_ORDER = { group: 0, module: 1, folder: 2, file: 3, type: 4, member: 5
 
 class GraphModel {
   constructor(g) {
+    // Preserve scanner containment before the legacy viewer groups loose root files.
+    this.canonicalIds = new Set(g.nodes.map(n => n.id));
+    this.realParent = new Map(g.nodes.map(n => [n.id, n.parentId || null]));
     // compact form from the host (GraphJson.SerializeCompact): edge ends are node indexes
     if (g.compact) {
       const id = x => typeof x === 'number' ? g.nodes[x].id : x;
@@ -47,7 +50,7 @@ class GraphModel {
       n.metrics = n.metrics || {};
       n.tags = n.tags || [];
       this.byId.set(n.id, n);
-      if (n.path && n.kind === 'file') this.byPath.set(n.path.toLowerCase(), n.id);
+      if (n.path && n.kind === 'file') this.byPath.set(this.pathKey(n.path), n.id);
     }
     const roots = [];
     for (const n of g.nodes) {
@@ -148,7 +151,7 @@ class GraphModel {
 
     // plain-Russian role of every node
     const pname = g.project?.name;
-    for (const n of g.nodes) n._desc = describe(n, pname);
+    for (const n of g.nodes) n._desc = typeof describe === 'function' ? describe(n, pname) : { ru: null, hint: null };
 
     // colour: every top-level block gets its own clearly different hue (big modules first get
     // the most distinct ones); children are shades of their parent so families stay readable.
@@ -168,6 +171,113 @@ class GraphModel {
       });
     };
     for (const id of this.top) { const { h, s } = this.hue.get(id); shade(id, h, s, 1); }
+    this.indexNavigation();
+  }
+
+  /** Additive indexes: unlike legacy drawing indexes, these retain every edge kind/name. */
+  indexNavigation() {
+    const append = (map, key, value) => {
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(value);
+    };
+    this.realChildren = new Map();
+    this.declarationsByPath = new Map();
+    this.declarationsByNode = new Map();
+    this.nodesByFile = new Map();
+    for (const id of this.canonicalIds) {
+      const n = this.node(id), parent = this.realParent.get(id);
+      if (parent) append(this.realChildren, parent, id);
+      const declarations = n.declarations?.length ? n.declarations :
+        (n.path && (n.kind === 'type' || n.kind === 'member') ? [{ path: n.path, line: n.line }] : []);
+      this.declarationsByNode.set(id, declarations);
+      const files = new Set();
+      for (const d of declarations) {
+        append(this.declarationsByPath, this.pathKey(d.path), { nodeId: id, ...d });
+        const file = this.fileAtPath(d.path);
+        if (file) files.add(file);
+      }
+      const file = this.actualFileOf(id);
+      if (file) files.add(file);
+      for (const fid of files) append(this.nodesByFile, fid, id);
+    }
+    const views = this.g.views || {}, explanations = this.explanationData(views.explanations);
+    this.featuresById = new Map((views.features || []).map(f => [f.id, f]));
+    this.tiersById = new Map((views.tiers || []).map(t => [t.id, t]));
+    this.assignmentsByNode = new Map((views.assignments || []).map(a => [a.nodeId, a]));
+    this.membershipsByNode = new Map();
+    this.membershipsByFeature = new Map();
+    for (const m of views.memberships || []) {
+      append(this.membershipsByNode, m.nodeId, m);
+      append(this.membershipsByFeature, m.featureId, m);
+    }
+    this.sources = explanations.sources || [];
+    this.explanationsById = new Map((explanations.nodes || []).map(n => [n.nodeId, n]));
+    this.nameIndex = new Map();
+    const name = (key, id) => {
+      if (!key) return;
+      key = key.toLowerCase();
+      if (!this.nameIndex.has(key)) this.nameIndex.set(key, new Set());
+      this.nameIndex.get(key).add(id);
+    };
+    for (const id of this.canonicalIds) {
+      const n = this.node(id);
+      name(n.name, id); name(n.path, id);
+    }
+    for (const [key, indexes] of Object.entries(explanations.nameIndex || {})) {
+      for (const index of indexes) {
+        const id = explanations.nodes?.[index]?.nodeId;
+        if (this.canonicalIds.has(id)) name(key, id);
+      }
+    }
+    this.allEdges = this.g.edges || [];
+    this.edgesByKind = new Map();
+    this.relationsOf = new Map();
+    for (const e of this.allEdges) {
+      append(this.edgesByKind, e.kind, e);
+      append(this.relationsOf, e.source, e);
+      if (e.target !== e.source) append(this.relationsOf, e.target, e);
+    }
+  }
+
+  pathKey(path) { return (path || '').replace(/\\/g, '/').toLowerCase(); }
+  fileAtPath(path) { return this.byPath.get(this.pathKey(path)) || null; }
+
+  /** SerializeCompact interns explanation text/sources independently of compact edges. */
+  explanationData(info) {
+    if (!info) return {};
+    if (!info.compact) return info;
+    const text = index => index == null ? null : info.texts[index];
+    const claim = row => ({ text: text(row[0]), confidence: ['known', 'derived', 'guessed'][row[1]], sourceIds: row[2] });
+    return { ...info,
+      nodes: info.nodes.map(row => ({ nodeId: typeof row[0] === 'number' ? this.g.nodes[row[0]].id : row[0],
+        displayName: claim(row[1]), description: claim(row[2]), claims: row[3]?.map(claim) })),
+      sources: info.sources.map(row => ({ kind: text(row[0]), path: text(row[1]), line: row[2], endLine: row[3],
+        sourceHash: text(row[4]), commitId: text(row[5]), ruleId: text(row[6]), reference: text(row[7]), text: text(row[8]) })),
+    };
+  }
+
+  /** Shared source-file lookup. Partial members use their own path, never their type's file. */
+  actualFileOf(id) {
+    const n = this.node(id);
+    if (!n) return null;
+    if (n.kind === 'file') return id;
+    if (n.path) return this.fileAtPath(n.path); // An unavailable own file is not another part.
+    const declaration = n.declarations?.[0];
+    if (declaration) return this.fileAtPath(declaration.path);
+    for (let p = this.realParent.get(id); p; p = this.realParent.get(p)) {
+      if (this.node(p)?.kind === 'file') return p;
+    }
+    return null;
+  }
+
+  sourcesFor(claim, nodeId) {
+    return (claim?.sourceIds || []).map(index => {
+      const source = this.sources[index];
+      if (!source) return null;
+      if (source.kind !== 'declaration' || source.reference !== 'self') return { ...source };
+      const n = this.node(nodeId);
+      return { ...source, nodeId, path: n?.path, line: n?.line, declarations: this.declarationsByNode.get(nodeId) || [] };
+    }).filter(Boolean);
   }
 
   colorOf(id) {
@@ -217,3 +327,5 @@ class GraphModel {
   descendantsCount(id) { return this.byId.get(id)?._agg?.files ?? 0; }
   isTest(id) { return this.byId.get(id)?.tags?.includes('test'); }
 }
+
+if (typeof module !== 'undefined') module.exports = { GraphModel, EDGE_CAT, EDGE_RU, KIND_RU };
