@@ -13,7 +13,8 @@ const LV_FAMILY_RU = { syntax: 'по содержимому', rules: 'прави
 
 const LV = {
   data: null, dataFor: null,
-  stack: [],                  // drill path: [{ cell: key } | { node: id }]
+  mode: 'links',              // links | tree | tiles | sun | stars | flows (shapeviews.js)
+  stack: [],                  // drill path: [{ tier } | { cell: key } | { node: id, file? }]
   t: { x: 0, y: 0, k: 1 }, scene: null, hover: null,
   showTests: false, showDocs: false,
   overrides: null, overridesRoot: null,
@@ -291,6 +292,7 @@ function lvDraw() {
   const g = lvEl('g', { id: 'lvg' }, svg);
   if (!sc) return;
   if (sc.empty) { lvEl('text', { x: 40, y: 80, class: 'empty' }, g).textContent = sc.empty; return; }
+  if (sc.custom) { sc.blocks = []; sc.links = []; sc.custom(g); lvApply(); return; }
   for (const b of sc.bands || []) {
     const bg = lvEl('g', { class: 'band' }, g);
     lvEl('rect', { x: b.x, y: b.y, width: b.w, height: b.h, rx: 14, style: `fill:${lvColor(b.tier)};fill-opacity:.07;stroke:${lvColor(b.tier)};stroke-opacity:.35` }, bg);
@@ -376,13 +378,14 @@ function lvFitView() {
   let drag = null;
   host.addEventListener('pointerdown', e => {
     if (e.button !== 0 || e.target.closest('.blk')) return;
-    drag = { x: e.clientX, y: e.clientY, t: { ...LV.t }, moved: false, empty: e.target.tagName === 'svg' };
-    host.setPointerCapture(e.pointerId);
+    // the pointer is captured only once it really moves: a plain click must still reach the shape under it
+    drag = { x: e.clientX, y: e.clientY, t: { ...LV.t }, moved: false, empty: e.target.tagName === 'svg', id: e.pointerId };
   });
   host.addEventListener('pointermove', e => {
     if (!drag) return;
     const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
-    if (Math.abs(dx) + Math.abs(dy) > 3) { drag.moved = true; host.classList.add('dragging'); }
+    if (!drag.moved && Math.abs(dx) + Math.abs(dy) > 3) { drag.moved = true; host.classList.add('dragging'); host.setPointerCapture(drag.id); }
+    if (!drag.moved) return;
     LV.t = { ...drag.t, x: drag.t.x + dx, y: drag.t.y + dy }; lvApply();
   });
   host.addEventListener('pointerup', e => {
@@ -401,7 +404,9 @@ function lvRender({ keepView = false } = {}) {
   else {
     if (top?.cell && !D.cells.has(top.cell) || top?.node && !S.model.byId.has(top.node)) LV.stack = [];
     const t = LV.stack[LV.stack.length - 1];
-    LV.scene = t ? lvInside(D, t) : lvOverview(D);
+    // a file or a class is always shown with its links; a block too in the views that have no own inner level
+    const own = SV_BUILD[LV.mode] && !t?.node && !(t?.cell && ['stars', 'flows'].includes(LV.mode));
+    LV.scene = own ? SV_BUILD[LV.mode](D) : t?.node || t?.cell ? lvInside(D, t) : lvOverview(D);
   }
   lvDraw();
   if (!keepView) lvFitView();
@@ -431,14 +436,16 @@ function lvBack(to = LV.stack.length - 1) { LV.stack = LV.stack.slice(0, Math.ma
 function lvBar() {
   const bar = $('#lvBar'), D = LV.data;
   const crumbs = [{ text: 'Вся программа', i: 0 }];
-  LV.stack.forEach((s, i) => crumbs.push({ text: s.cell ? `${lvTierName(D.cells.get(s.cell)?.tier)} · ${lvColName(D.cells.get(s.cell)?.col)}` : S.model.node(s.node)?.name, i: i + 1 }));
+  LV.stack.forEach((s, i) => crumbs.push({ text: s.tier ? lvTierName(s.tier) : s.cell ? `${lvTierName(D.cells.get(s.cell)?.tier)} · ${lvColName(D.cells.get(s.cell)?.col)}` : S.model.node(s.node)?.name, i: i + 1 }));
   const cur = LV.stack[LV.stack.length - 1];
-  bar.innerHTML = crumbs.map((c, i) => `${i ? '<i>›</i>' : ''}<span class="crumb${i === crumbs.length - 1 ? ' cur' : ''}" data-lv-back="${c.i}" title="${esc(c.text)}">${esc(c.text)}</span>`).join('') +
+  bar.innerHTML = `<div class="seg small" title="Как показать">${SV_MODES.map(([m, n]) => `<button data-lv-mode="${m}" class="${LV.mode === m ? 'active' : ''}">${n}</button>`).join('')}</div>` + crumbs.map((c, i) => `${i ? '<i>›</i>' : ''}<span class="crumb${i === crumbs.length - 1 ? ' cur' : ''}" data-lv-back="${c.i}" title="${esc(c.text)}">${esc(c.text)}</span>`).join('') +
     '<span class="sp"></span>' +
     (cur?.node ? '<button data-lv-map title="Тот же блок на обычной «Схеме»">На обычной схеме</button>' : '') +
     (D ? `<span class="chip${LV.showTests ? '' : ' off'}" data-lv-toggle="tests">Проверки</span><span class="chip${LV.showDocs ? '' : ' off'}" data-lv-toggle="docs">Документы</span>` : '');
 }
 $('#lvBar').addEventListener('click', e => {
+  const md = e.target.closest('[data-lv-mode]');
+  if (md) { LV.mode = md.dataset.lvMode; if (LV.stack[LV.stack.length - 1]?.node) LV.stack = []; lvRender(); return; }
   const b = e.target.closest('[data-lv-back]');
   if (b && !b.classList.contains('cur')) { lvBack(+b.dataset.lvBack); return; }
   const tg = e.target.closest('[data-lv-toggle]');
@@ -475,13 +482,20 @@ function lvDetails(selId) {
   const sc = LV.scene;
   if (!cur) {
     const v = D.v, files = v.assignments.length, sure = v.assignments.filter(a => a.decision === 'automatic' || a.decision === 'override').length;
-    el.innerHTML = `<div class="card head"><span class="kind">вид</span><h2>Схема связей</h2>
-      <div class="what prose"><p>Большие цветные полосы — <b>ярусы</b> программы: от того, что видит человек, до хранения и движка. Блоки — <b>функции</b> на этом ярусе; одна функция стоит на одной линии на всех ярусах. Стрелка — код одного блока обращается к коду другого; чем толще, тем больше обращений.</p>
-      <p>Наведите на блок — его связи. Нажмите — что внутри. Колесо — приближение, перетаскивание — сдвиг, F — показать всё.</p>
+    el.innerHTML = `<div class="card head"><span class="kind">вид</span><h2>${esc(SV_MODES.find(m => m[0] === LV.mode)?.[1] || 'Связи')}</h2>
+      <div class="what prose"><p>${SV_HELP[LV.mode] || SV_HELP.links}</p>
+      <p>Колесо — приближение, перетаскивание — сдвиг, F — показать всё, Esc — шаг назад.</p>
       <p>Блок с пунктирной рамкой: ярус большинства его файлов угадан по именам папок, а не по содержимому. Исправить — внутри блока.</p></div></div>
-      <div class="card"><h3>Что показано</h3><div class="facts">${fact(files, 'файлов с ярусом')}${fact(sure, 'из них уверенно')}${fact(v.features.length, 'функций найдено')}${fact(sc.links.length, 'связей между блоками')}</div>
-      <p class="why">Видны ${Math.min(LV_TOPLINKS, sc.links.length)} самых сильных связей; остальные — при наведении на блок.</p></div>
+      <div class="card"><h3>Что показано</h3><div class="facts">${fact(files, 'файлов с ярусом')}${fact(sure, 'из них уверенно')}${fact(v.features.length, 'функций найдено')}${fact(D.cellLinks.length, 'связей между блоками')}</div>
+      ${LV.mode === 'links' ? `<p class="why">Видны ${Math.min(LV_TOPLINKS, D.cellLinks.length)} самых сильных связей; остальные — при наведении на блок.</p>` : ''}</div>
       ${v.staleOverrides?.length ? `<div class="card"><h3>Правки без цели<span class="c">${v.staleOverrides.length}</span></h3><p class="why">Эти ручные правки больше ни к чему не относятся (файл переименован или удалён) и не применяются: ${v.staleOverrides.slice(0, 6).map(esc).join(', ')}</p></div>` : ''}`;
+    return;
+  }
+  if (cur.tier && !selId) {
+    const cells = [...D.cells.values()].filter(c => c.tier === cur.tier);
+    el.innerHTML = `<div class="card head" style="--hd:${lvColor(cur.tier)}"><span class="kind">ярус</span><h2>${esc(lvTierName(cur.tier))}</h2>
+      <div class="what prose"><p>${esc(D.tiers.get(cur.tier)?.description || '')}.</p></div></div>
+      <div class="card"><h3>Функции на ярусе<span class="c">${cells.length}</span></h3>${lvList(cells.sort((a, b) => b.files.length - a.files.length).map(c => ({ tier: c.tier, name: lvColName(c.col), n: c.files.length, attr: `data-lv-cell="${esc(c.key)}"` })))}</div>`;
     return;
   }
   if (cur.cell && !selId) {
