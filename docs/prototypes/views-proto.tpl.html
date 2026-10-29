@@ -1,252 +1,271 @@
-<title>projmap: ярусы, функции, время</title>
+<title>projmap: виды проекта</title>
 <meta name="claude:viewport-fit-sides" content="cover">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
 <style>
-/* Layout: projmap-like shell — top bar with five variant tabs, feature rail, one view. Everything is HTML flow/grid,
-   so labels wrap instead of colliding. Single deliberate dark look, matching the projmap window. */
+/* Layout: full-height app — slim top bar with variant tabs, a floating feature panel, the picture fills the rest.
+   Labels are drawn only where they have room; details live in one tooltip and one info card. */
 :root{
   color-scheme:dark;
-  --bg:#15181f; --panel:#1d212a; --panel2:#252a35; --line:#333a48; --fg:#e8eaf0; --muted:#9aa1b1; --dim:#6b7283; --accent:#7aa2ff;
-  --t-ui:#5aa7ff; --t-app:#e09a45; --t-domain:#4fbf86; --t-data:#cf6cc0; --t-infra:#c9b74c;
-  --sans:"IBM Plex Sans","Segoe UI",system-ui,sans-serif; --mono:"IBM Plex Mono",Consolas,monospace;
+  --bg:#0d1017; --bg2:#121722; --panel:#161c28cc; --solid:#171d29; --line:#2a3242; --fg:#eef1f7; --muted:#9aa3b5; --dim:#5f687a; --accent:#8fb0ff;
+  --t-ui:#5aa7ff; --t-app:#f0a04b; --t-domain:#47c98a; --t-data:#d872c8; --t-infra:#d8c55a;
+  --sans:"Golos Text","Segoe UI",system-ui,sans-serif; --mono:"JetBrains Mono",Consolas,monospace;
 }
 *{box-sizing:border-box}
 html,body{height:100%}
-body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.45 var(--sans)}
-.app{min-height:100%;display:grid;grid-template-rows:auto 1fr}
-header{display:flex;flex-wrap:wrap;align-items:center;gap:12px 20px;background:var(--panel);border-bottom:1px solid var(--line);
-  padding-block:12px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));
-  position:sticky;top:env(safe-area-inset-top,0px);z-index:5}
-.brand{min-width:0}.brand b{font-size:18px}.brand span{display:block;color:var(--muted);font-size:12px}
-.tabs{display:flex;flex-wrap:wrap;gap:4px;background:var(--bg);padding:4px;border-radius:10px;border:1px solid var(--line)}
-.tabs button{all:unset;cursor:pointer;padding:8px 14px;border-radius:7px;color:var(--muted);font-weight:500;white-space:nowrap}
+body{margin:0;color:var(--fg);font:15px/1.45 var(--sans);background:radial-gradient(1200px 700px at 70% 10%,#18213a 0%,transparent 60%),radial-gradient(900px 600px at 10% 90%,#1a1530 0%,transparent 55%),var(--bg);overflow:hidden}
+.app{height:100%;display:grid;grid-template-rows:auto 1fr}
+header{display:flex;flex-wrap:wrap;align-items:center;gap:10px 22px;padding-block:12px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));border-bottom:1px solid #ffffff10;background:#0d1017aa;backdrop-filter:blur(8px)}
+.brand b{font-size:18px;letter-spacing:-.01em}.brand span{display:block;color:var(--muted);font-size:12px}
+.tabs{display:flex;flex-wrap:wrap;gap:2px;padding:4px;border-radius:12px;background:#ffffff08;border:1px solid #ffffff12}
+.tabs button{all:unset;cursor:pointer;padding:8px 14px;border-radius:9px;color:var(--muted);font-weight:500;white-space:nowrap}
 .tabs button:hover{color:var(--fg)}
-.tabs button[aria-selected=true]{background:var(--panel2);color:var(--fg);box-shadow:inset 0 -2px 0 var(--accent)}
+.tabs button[aria-selected=true]{background:#ffffff14;color:var(--fg)}
+.tabs .sep{width:1px;background:#ffffff1a;margin:6px 6px}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-main{display:grid;grid-template-columns:260px minmax(0,1fr);min-height:0}
-main>div{min-width:0}
-aside{background:var(--panel);border-right:1px solid var(--line);padding:16px 14px 28px;position:sticky;top:70px;align-self:start;max-height:calc(100vh - 70px);overflow:auto}
-aside h3{margin:0 0 8px;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
-.chips{display:flex;flex-direction:column;gap:3px;margin-bottom:20px}
-.chip{all:unset;cursor:pointer;display:grid;grid-template-columns:12px 1fr auto;align-items:center;gap:9px;padding:7px 9px;border-radius:7px;border:1px solid transparent}
-.chip:hover{background:var(--panel2)}
-.chip[aria-pressed=true]{border-color:var(--accent);background:#7aa2ff1c}
-.chip i{width:10px;height:10px;border-radius:50%}
-.chip small{color:var(--dim);font-family:var(--mono)}
-.legend{display:flex;flex-direction:column;gap:8px;font-size:13px;color:var(--muted)}
-.legend span{display:flex;gap:9px;align-items:flex-start}.legend i{flex:none;width:12px;height:12px;border-radius:3px;margin-top:3px}
-.legend b{color:var(--fg);font-weight:500;display:block}
-.view{padding:22px max(16px,env(safe-area-inset-right,0px)) 40px 26px;min-width:0}
-.view[hidden]{display:none!important}
-.view h2{margin:0 0 6px;font-size:22px;font-weight:600;text-wrap:balance}
-.lead{margin:0 0 20px;color:var(--muted);max-width:76ch}
-.pill{display:inline-flex;align-items:center;gap:6px;padding:2px 9px;border-radius:999px;font-size:12px;font-weight:500;white-space:nowrap}
-.mono{font-family:var(--mono)}
-.muted{color:var(--muted)}
-/* 1 floors */
-.floors{display:flex;flex-direction:column;gap:0;max-width:1500px}
-.floor{display:grid;grid-template-columns:220px minmax(0,1fr);gap:18px;padding:16px;border-radius:12px;background:var(--panel);border-left:5px solid var(--c)}
-.floor h4{margin:0;font-size:17px}.floor p{margin:4px 0 0;color:var(--muted);font-size:13px}
-.mods{display:flex;flex-wrap:wrap;gap:12px;align-content:flex-start;min-width:0}
-.mod{flex:1 1 220px;max-width:420px;min-width:0;padding:12px 14px;border-radius:10px;background:color-mix(in srgb,var(--c) 13%,var(--panel2));border:1px solid color-mix(in srgb,var(--c) 55%,transparent)}
-.mod b{display:block;overflow-wrap:anywhere}.mod .n{color:var(--muted);font-size:13px;font-family:var(--mono)}
-.mod .hit{margin-top:8px;font-size:13px}
-.bar{height:6px;border-radius:3px;background:var(--line);overflow:hidden;margin-top:6px}.bar>i{display:block;height:100%;background:var(--accent)}
-.link{display:flex;align-items:center;gap:10px;padding:6px 0 6px 40px;color:var(--muted);font-size:13px}
-.link::before{content:"";width:2px;height:22px;background:var(--line)}
-/* 2 bars */
-.rows{display:flex;flex-direction:column;gap:14px;max-width:1300px}
-.row{all:unset;box-sizing:border-box;max-width:100%;min-width:0;cursor:pointer;display:grid;grid-template-columns:190px minmax(0,1fr);gap:16px;align-items:center;padding:8px 10px;border-radius:10px}
-.row:hover{background:var(--panel)}
-.row[aria-pressed=true]{background:var(--panel);box-shadow:inset 0 0 0 1px var(--accent)}
-.row .name b{display:block}.row .name small{color:var(--dim);font-family:var(--mono)}
-.stack{display:flex;height:34px;border-radius:7px;overflow:hidden;min-width:0}
-.stack>span{display:flex;align-items:center;justify-content:center;font:500 12px var(--mono);color:#10131a;min-width:0;overflow:hidden;white-space:nowrap}
-.parts{grid-column:2;display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12px;color:var(--muted)}
-.parts i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px}
-.detail{margin-top:22px;max-width:1300px;padding:16px;border-radius:12px;background:var(--panel);border:1px solid var(--line)}
-.detail h4{margin:0 0 10px}
-.cols{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px}
-.cols h5{margin:0 0 6px;font-size:13px}.cols code{display:block;font:12px var(--mono);color:#c8d0e3;overflow-wrap:anywhere;padding:1px 0}
-/* 3 cards */
-.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:16px;max-width:1700px}
-.card{all:unset;box-sizing:border-box;min-width:0;cursor:pointer;display:flex;flex-direction:column;gap:12px;padding:16px;border-radius:14px;background:var(--panel);border:1px solid var(--line)}
-.card:hover{border-color:var(--muted)}
-.card[aria-pressed=true]{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
-.card header{all:unset;display:flex;justify-content:space-between;gap:10px;align-items:baseline}
-.card header b{font-size:17px}.card header span{color:var(--muted);font-family:var(--mono);font-size:13px}
-.mini{display:flex;flex-direction:column;gap:6px}
-.mini div{display:grid;grid-template-columns:86px minmax(0,1fr) 26px;gap:8px;align-items:center;font-size:12px;color:var(--muted)}
-.mini em{font-style:normal;text-align:right;font-family:var(--mono);color:var(--fg)}
-.mini .track{height:10px;border-radius:5px;background:var(--panel2);overflow:hidden}.mini .track i{display:block;height:100%;border-radius:5px}
-.card .hint{font-size:12px;color:var(--dim)}
-/* 4 time */
-.weeks{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(190px,1fr);gap:12px;overflow-x:auto;padding-bottom:10px;max-width:1700px}
-.week{display:flex;flex-direction:column;gap:10px;padding:14px;border-radius:12px;background:var(--panel);border:1px solid var(--line);min-width:0}
-.week.gap{opacity:.55;border-style:dashed}
-.week h4{margin:0;font-size:15px}.week .total{font:600 26px var(--mono)}
-.week .total small{font:400 12px var(--sans);color:var(--muted);margin-left:6px}
-.vstack{display:flex;flex-direction:column-reverse;height:170px;border-radius:7px;overflow:hidden;background:var(--panel2)}
-.vstack>i{display:block;width:100%}
-.wlist{display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--muted)}
-.wlist>span{display:flex;justify-content:space-between;align-items:baseline;gap:8px}.wlist b{color:var(--fg);font-weight:500;min-width:0}.wlist em{font-style:normal;font-family:var(--mono)}
-.stages{display:flex;flex-wrap:wrap;gap:5px}
-.stages span{font:500 11px var(--mono);padding:2px 7px;border-radius:999px;background:#7aa2ff22;color:#c7d6ff}
-.stages-head{font-size:12px;color:var(--muted)}
-/* 5 path */
-.pathwrap{display:grid;grid-template-columns:260px minmax(0,1fr);gap:24px;max-width:1500px}
-.btns{display:flex;flex-direction:column;gap:8px}
-.btns button{all:unset;cursor:pointer;padding:10px 12px;border-radius:9px;border:1px solid var(--line);background:var(--panel)}
-.btns button[aria-pressed=true]{border-color:var(--accent);background:#7aa2ff1c}
+.stage{position:relative;min-height:0}
+.canvas{position:absolute;inset:0}
+.canvas svg,.canvas canvas{display:block;width:100%;height:100%}
+.float{position:absolute;z-index:3;padding:14px 16px;border-radius:16px;background:var(--panel);border:1px solid #ffffff14;backdrop-filter:blur(14px);box-shadow:0 10px 40px #0006}
+.legendbox{left:max(16px,env(safe-area-inset-left,0px));top:16px;width:236px;max-height:calc(100% - 32px);overflow:auto}
+.legendbox h3,.info h3{margin:0 0 8px;font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);font-weight:600}
+.chips{display:flex;flex-direction:column;gap:2px;margin-bottom:14px}
+.chip{all:unset;cursor:pointer;display:grid;grid-template-columns:10px 1fr auto;gap:10px;align-items:center;padding:6px 8px;border-radius:9px;font-size:14px}
+.chip:hover{background:#ffffff0d}.chip[aria-pressed=true]{background:#ffffff16}
+.chip i{width:10px;height:10px;border-radius:50%}.chip small{color:var(--dim);font:12px var(--mono)}
+.tiers{display:flex;flex-direction:column;gap:5px;font-size:13px;color:var(--muted)}.tiers i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:8px}
+.info{right:max(16px,env(safe-area-inset-right,0px));top:16px;width:300px}
+.info h2{margin:0 0 4px;font-size:19px;letter-spacing:-.01em}.info p{margin:0;color:var(--muted);font-size:13px}
+.tip{position:fixed;z-index:9;pointer-events:none;padding:8px 11px;border-radius:10px;background:#0b0e15f0;border:1px solid #ffffff1f;font-size:13px;max-width:320px;opacity:0;transition:opacity .1s}
+.tip b{display:block}.tip span{color:var(--muted);font:12px var(--mono)}
+.page{position:absolute;inset:0;overflow:auto;padding:24px 340px 32px 276px}
+.page h2{margin:0 0 6px;font-size:22px}.page p.lead{margin:0 0 18px;color:var(--muted);max-width:70ch}
+/* time */
+.weeks{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(180px,1fr);gap:12px;overflow-x:auto;padding-bottom:8px}
+.week{display:flex;flex-direction:column;gap:10px;padding:14px;border-radius:14px;background:var(--solid);border:1px solid var(--line);min-width:0}
+.week.gap{opacity:.55;border-style:dashed}.week h4{margin:0;font-size:14px}.week .total{font:600 26px var(--mono)}.week .total small{font:400 12px var(--sans);color:var(--muted);margin-left:6px}
+.vstack{display:flex;flex-direction:column-reverse;border-radius:8px;overflow:hidden;background:#ffffff08}.vstack>i{display:block;width:100%;border-top:1px solid var(--solid)}
+.wlist{display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--muted)}.wlist>span{display:flex;justify-content:space-between;gap:8px}.wlist b{color:var(--fg);font-weight:500}.wlist em{font-style:normal;font-family:var(--mono)}
+.stages{display:flex;flex-wrap:wrap;gap:5px}.stages span{font:500 11px var(--mono);padding:2px 7px;border-radius:999px;background:#8fb0ff22;color:#cfdcff}
+/* path */
+.pathwrap{display:grid;grid-template-columns:230px minmax(0,1fr);gap:22px}
+.btns{display:flex;flex-direction:column;gap:8px}.btns button{all:unset;cursor:pointer;padding:10px 12px;border-radius:11px;border:1px solid var(--line);background:var(--solid)}.btns button[aria-pressed=true]{border-color:var(--accent);background:#8fb0ff1c}
 .lanes{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px}
-.lane-h{padding:8px 10px;border-radius:8px;font-weight:600;font-size:13px;text-align:center;background:color-mix(in srgb,var(--c) 18%,var(--panel));color:var(--fg)}
-.step{grid-column:var(--col);padding:11px 12px;border-radius:10px;background:var(--panel);border:1px solid var(--c);min-width:0}
-.step b{display:block;overflow-wrap:anywhere}.step small{display:block;color:var(--muted);font:12px var(--mono);word-break:break-word;margin-top:3px}
-.step .k{font-size:11px;color:var(--dim)}
-.step .from{display:block;font-size:11px;color:var(--muted);margin-top:6px}
-@media (max-width:900px){
-  main{grid-template-columns:minmax(0,1fr)} aside{position:static;max-height:none;border-right:0;border-bottom:1px solid var(--line)}
-  .chips{flex-direction:row;flex-wrap:wrap}.chip{grid-template-columns:12px auto auto}
-  .floor{grid-template-columns:minmax(0,1fr)}.row{grid-template-columns:minmax(0,1fr);width:100%}.parts{grid-column:1}.view{padding-right:16px}
-  .pathwrap{grid-template-columns:1fr}.lanes{grid-template-columns:1fr}.lane-h{display:none}.step{grid-column:1}
-  .view{padding-left:max(16px,env(safe-area-inset-left,0px))}
-}
+.lane-h{padding:8px;border-radius:10px;font-weight:600;font-size:13px;text-align:center;background:color-mix(in srgb,var(--c) 22%,transparent)}
+.step{grid-column:var(--col);padding:11px 12px;border-radius:12px;background:var(--solid);border:1px solid var(--c);min-width:0}
+.step b{display:block;overflow-wrap:anywhere}.step small{display:block;color:var(--muted);font:12px var(--mono);word-break:break-word;margin-top:3px}.step .k{font-size:11px;color:var(--dim)}.step .from{display:block;font-size:11px;color:var(--muted);margin-top:6px}
+@media (max-width:900px){body{overflow:auto}.app{height:auto}.stage{height:auto}.canvas{position:relative;height:80vh}.float{position:relative;inset:auto;width:auto;margin:12px 16px}.page{position:relative;padding:16px}.pathwrap{grid-template-columns:1fr}.lanes{grid-template-columns:1fr}.lane-h{display:none}.step{grid-column:1}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 
 <div class="app">
 <header>
-  <div class="brand"><b>Map</b><span>474 файла программы · 9 функций · 5 ярусов · 1642 кнопки</span></div>
-  <nav class="tabs" role="tablist" aria-label="Вариант вида">
-    <button role="tab" data-v="1">1 · Этажи</button>
-    <button role="tab" data-v="2">2 · Полосы функций</button>
-    <button role="tab" data-v="3">3 · Карточки</button>
-    <button role="tab" data-v="4">4 · Лента времени</button>
-    <button role="tab" data-v="5">5 · От кнопки</button>
+  <div class="brand"><b>Map</b><span>473 файла · 9 функций · 5 ярусов</span></div>
+  <nav class="tabs" role="tablist" aria-label="Вид">
+    <button role="tab" data-v="1">Созвездие</button>
+    <button role="tab" data-v="2">Пузыри</button>
+    <button role="tab" data-v="3">Город кода</button>
+    <button role="tab" data-v="4">Солнце</button>
+    <button role="tab" data-v="5">Потоки</button>
+    <span class="sep" aria-hidden="true"></span>
+    <button role="tab" data-v="6">Время</button>
+    <button role="tab" data-v="7">От кнопки</button>
   </nav>
 </header>
-<main>
-  <aside>
-    <h3>Функция</h3>
-    <div class="chips" id="chips"></div>
-    <h3>Ярусы</h3>
-    <div class="legend" id="legend"></div>
-  </aside>
-  <div>
-    <section class="view" id="v1"><h2>Этажи программы</h2><p class="lead">Сверху то, что видит человек, ниже — то, на чём это держится. Выберите функцию слева: на каждом этаже появится, сколько её файлов там лежит.</p><div class="floors" id="floors"></div></section>
-    <section class="view" id="v2" hidden><h2>Из чего сделана каждая функция</h2><p class="lead">Длина полосы — сколько файлов у функции, цвет — на каком ярусе они лежат. Нажмите на функцию, чтобы увидеть её файлы по ярусам.</p><div class="rows" id="rows"></div><div class="detail" id="detail2"></div></section>
-    <section class="view" id="v3" hidden><h2>Карточки функций</h2><p class="lead">Одна карточка — одна функция. Внутри — её «отпечаток» по этажам: какие ярусы она задевает и насколько.</p><div class="cards" id="cards"></div></section>
-    <section class="view" id="v4" hidden><h2>Лента времени</h2><p class="lead">Неделя за неделей: сколько было сохранений кода, какие функции менялись и какие этапы дорожной карты закрыты. Выбранная функция подсвечена.</p><div class="weeks" id="weeks"></div></section>
-    <section class="view" id="v5" hidden><h2>От кнопки до кода</h2><p class="lead">Выберите кнопку — увидите, через какие ярусы проходит её работа, шаг за шагом. Это возможный путь по связям кода (projmap), а не запись реального запуска.</p><div class="pathwrap"><div class="btns" id="btns"></div><div class="lanes" id="lanes"></div></div></section>
-  </div>
-</main>
+<div class="stage">
+  <div class="canvas" id="canvas"></div>
+  <div class="page" id="page" hidden></div>
+  <div class="float legendbox"><h3>Функции</h3><div class="chips" id="chips"></div><h3>Ярусы</h3><div class="tiers" id="tiers"></div></div>
+  <div class="float info" id="info"></div>
 </div>
+</div>
+<div class="tip" id="tip"></div>
 
 <script>
 const D = __DATA__;
-const TIERS = [
-  {id:'ui', name:'Интерфейс', sub:'окна, панели, кнопки, состояние экранов'},
-  {id:'app', name:'Сценарии', sub:'экспорт и операции над картой'},
-  {id:'domain', name:'Ядро', sub:'документ карты, правила, команды правки'},
-  {id:'data', name:'Данные', sub:'сохранение файлов, каталог ресурсов'},
-  {id:'infra', name:'Движок', sub:'отрисовка, связь с Windows'},
-];
-// Real project references (csproj): who each floor uses.
-const USES = {ui:'Сценарии, Данные, Ядро, Движок', app:'Ядро, Движок', data:'Ядро', infra:'Ядро', domain:'ни от кого не зависит'};
-const FCOL = {export:'#7aa2ff', hex:'#f0a35e', light:'#f4d35e', save:'#d17ad6', atlas:'#6fd0c4', roads:'#c69c6d', rivers:'#5fb8ef', assets:'#9ad46b', style:'#ef7f9a'};
-const tv = id => `var(--t-${id})`;
-const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-const feats = D.features;
-const cnt = (t,f) => D.matrix[t][f] || 0;
-const total = f => TIERS.reduce((a,t)=>a+cnt(t.id,f),0);
-const fname = id => feats.find(f=>f.id===id)?.name || '';
-let sel = 'light';
+const TIERS=[{id:'ui',name:'Интерфейс',sub:'окна, панели, кнопки'},{id:'app',name:'Сценарии',sub:'экспорт, операции'},{id:'domain',name:'Ядро',sub:'документ карты, правила'},{id:'data',name:'Данные',sub:'сохранение, каталог'},{id:'infra',name:'Движок',sub:'отрисовка, Windows'}];
+const TC={ui:'#5aa7ff',app:'#f0a04b',domain:'#47c98a',data:'#d872c8',infra:'#d8c55a'};
+const FEATS=[...D.features,{id:'other',name:'Общий код'}];
+const FC={export:'#8fb0ff',hex:'#ffab6b',light:'#ffd86b',save:'#e08ae4',atlas:'#6fe0d0',roads:'#d7aa78',rivers:'#62c3ff',assets:'#a5e06e',style:'#ff8fae',other:'#59627a'};
+const fname=id=>FEATS.find(f=>f.id===id)?.name||id, tname=id=>TIERS.find(t=>t.id===id)?.name||id;
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const plural=(n,a,b,c)=>{n=Math.abs(n)%100;const m=n%10;return n>10&&n<20?c:m===1?a:m>=2&&m<=4?b:c;};
+const files=D.files; const nF=f=>files.filter(x=>x.f===f).length;
+let sel=null, view='1';
+const tip=document.getElementById('tip');
+function showTip(e,html){tip.innerHTML=html;tip.style.opacity=1;const x=Math.min(e.clientX+14,innerWidth-340),y=Math.min(e.clientY+14,innerHeight-80);tip.style.left=x+'px';tip.style.top=y+'px';}
+function hideTip(){tip.style.opacity=0;}
+const fileTip=f=>`<b>${esc(f.n)}</b><span>${tname(f.t)} · ${fname(f.f)}<br>${f.m} функций · ${f.c} изм. с августа</span>`;
+const chips=document.getElementById('chips');
+chips.innerHTML=FEATS.map(f=>`<button class="chip" data-id="${f.id}" aria-pressed="false"><i style="background:${FC[f.id]}"></i><span>${esc(f.name)}</span><small>${nF(f.id)}</small></button>`).join('');
+chips.onclick=e=>{const b=e.target.closest('.chip');if(b){sel=sel===b.dataset.id?null:b.dataset.id;draw();}};
+document.getElementById('tiers').innerHTML=TIERS.map(t=>`<span><i style="background:${TC[t.id]}"></i>${t.name} <span style="color:var(--dim)">— ${t.sub}</span></span>`).join('');
+const info=document.getElementById('info');
+function setInfo(title,text){info.innerHTML=`<h3>${title}</h3>${text}`;}
+const canvas=document.getElementById('canvas'), page=document.getElementById('page');
+const size=()=>({W:canvas.clientWidth,H:canvas.clientHeight});
 
-const chips = document.getElementById('chips');
-chips.innerHTML = feats.map(f=>`<button class="chip" data-id="${f.id}" aria-pressed="false"><i style="background:${FCOL[f.id]}"></i><span>${esc(f.name)}</span><small>${total(f.id)}</small></button>`).join('');
-chips.onclick = e => { const b=e.target.closest('.chip'); if(!b) return; sel = sel===b.dataset.id ? null : b.dataset.id; render(); };
-document.getElementById('legend').innerHTML = TIERS.map(t=>`<span><i style="background:${tv(t.id)}"></i><span><b>${t.name}</b>${t.sub}</span></span>`).join('');
-
+// 1 · constellation: hierarchical edge bundling (feature arcs around the circle, bundled call links)
 function v1(){
-  const out=[];
-  TIERS.forEach((t,i)=>{
-    const mods = D.modules.filter(m=>m.tier===t.id);
-    const n = sel ? cnt(t.id, sel) : 0, tot = TIERS.reduce((a,x)=>a+cnt(x.id,sel||'x'),0)||1;
-    out.push(`<div class="floor" style="--c:${tv(t.id)}"><div><h4>${t.name}</h4><p>${t.sub}</p>
-      ${sel?`<p style="margin-top:10px;color:var(--fg)"><span class="pill" style="background:${FCOL[sel]}33;color:var(--fg)">${esc(fname(sel))}: ${n||'нет'} ${n?plural(n,'файл','файла','файлов'):''}</span></p>`:''}</div>
-      <div class="mods">${mods.map(m=>`<div class="mod" style="--c:${tv(t.id)}"><b>${m.name.replace('Map.','')}</b><span class="n">${m.files} ${plural(m.files,'файл','файла','файлов')}</span></div>`).join('')}</div></div>`);
-    if(i<TIERS.length-1) out.push(`<div class="link">${t.name} использует: ${USES[t.id]}</div>`);
-  });
-  out.push(`<div class="link" style="padding-left:0">✓ Ядро ни от кого не зависит — нарушений направления нет (по ссылкам проектов).</div>`);
-  document.getElementById('floors').innerHTML = out.join('');
+  const {W,H}=size(); const R=Math.min(W-560,H)/2-100; const cx=276+(W-276-320)/2, cy=H/2;
+  const CF=FEATS.filter(f=>f.id!=='other'); const root=d3.hierarchy({children:CF.map(f=>({id:f.id,children:files.map((x,i)=>({...x,i})).filter(x=>x.f===f.id).sort((a,b)=>a.t.localeCompare(b.t))}))}).sum(()=>1);
+  d3.cluster().size([2*Math.PI,R])(root);
+  const leaves=root.leaves(); const byI=new Map(leaves.map(l=>[l.data.i,l]));
+  const svg=d3.select(canvas).append('svg').attr('viewBox',`0 0 ${W} ${H}`);
+  const g=svg.append('g').attr('transform',`translate(${cx},${cy})`);
+  const line=d3.lineRadial().curve(d3.curveBundle.beta(.85)).radius(d=>d.y).angle(d=>d.x);
+  const maxN=d3.max(D.flinks,l=>l[2]);
+  const links=D.flinks.map(([a,b,n])=>({s:byI.get(a),t:byI.get(b),n})).filter(l=>l.s&&l.t).slice(0,260);
+  const on=l=>!sel||l.s.data.f===sel||l.t.data.f===sel;
+  g.append('g').attr('fill','none').selectAll('path').data(links.sort((a,b)=>on(a)-on(b))).join('path')
+    .attr('d',l=>line(l.s.path(l.t))).attr('stroke',l=>on(l)&&sel?FC[sel]:FC[l.s.data.f])
+    .attr('stroke-opacity',l=>on(l)?(sel?.85:.32):.04).attr('stroke-width',l=>.6+2.2*Math.sqrt(l.n/maxN));
+  g.append('g').selectAll('circle').data(leaves).join('circle')
+    .attr('transform',d=>`rotate(${d.x*180/Math.PI-90}) translate(${d.y},0)`).attr('r',d=>1.6+Math.sqrt(d.data.m)/2.2)
+    .attr('fill',d=>TC[d.data.t]).attr('opacity',d=>!sel||d.data.f===sel?.95:.25)
+    .on('mousemove',(e,d)=>showTip(e,fileTip(d.data))).on('mouseleave',hideTip);
+  const arc=d3.arc().innerRadius(R+16).outerRadius(R+22).cornerRadius(3);
+  root.children.forEach(c=>{ const a0=d3.min(c.leaves(),l=>l.x)-.012, a1=d3.max(c.leaves(),l=>l.x)+.012;
+    g.append('path').attr('d',arc({startAngle:a0,endAngle:a1})).attr('fill',FC[c.data.id]).attr('opacity',!sel||sel===c.data.id?1:.3).style('cursor','pointer').on('click',()=>{sel=sel===c.data.id?null:c.data.id;draw();});
+    const mid=(a0+a1)/2, deg=mid*180/Math.PI-90, flip=mid>Math.PI;
+    g.append('text').attr('transform',`rotate(${deg}) translate(${R+32},0) ${flip?'rotate(180)':''}`).attr('text-anchor',flip?'end':'start').attr('dy','.35em')
+      .attr('fill',!sel||sel===c.data.id?'#eef1f7':'#5f687a').attr('font-size',13).attr('font-weight',600).text(fname(c.data.id)); });
+  const mine=links.filter(l=>sel&&on(l));
+  setInfo('Созвездие', sel?`<h2 style="color:${FC[sel]}">${esc(fname(sel))}</h2><p>${mine.length} сильных связей с другими функциями. Точки — файлы (цвет — ярус), нити — вызовы кода между функциями, связанные в пучки.</p>`
+    :`<h2>Кто с кем связан</h2><p>По кругу — файлы девяти функций (общий код не показан). Нити — вызовы между разными функциями; чем ярче пучок, тем теснее связь. Наведите на точку или нажмите на функцию.</p>`);
 }
-function plural(n,a,b,c){ n=Math.abs(n)%100; const m=n%10; return n>10&&n<20?c:m===1?a:m>=2&&m<=4?b:c; }
 
+// 2 · bubbles: zoomable circle packing tier > feature > file
 function v2(){
-  const max = Math.max(...feats.map(f=>total(f.id)));
-  document.getElementById('rows').innerHTML = feats.slice().sort((a,b)=>total(b.id)-total(a.id)).map(f=>{
-    const tt=total(f.id);
-    const segs = TIERS.map(t=>({t,n:cnt(t.id,f.id)})).filter(x=>x.n);
-    return `<button class="row" data-id="${f.id}" aria-pressed="${sel===f.id}">
-      <span class="name"><b>${esc(f.name)}</b><small>${tt} ${plural(tt,'файл','файла','файлов')}</small></span>
-      <span class="stack" style="width:${Math.max(18,100*tt/max)}%">${segs.map(x=>`<span style="flex:${x.n};background:${tv(x.t.id)}" title="${x.t.name}: ${x.n}">${x.n/tt>.12?x.n:''}</span>`).join('')}</span>
-      <span class="parts">${segs.map(x=>`<span><i style="background:${tv(x.t.id)}"></i>${x.t.name} ${x.n}</span>`).join('')}</span></button>`;
-  }).join('');
-  document.getElementById('rows').onclick = e => { const b=e.target.closest('.row'); if(b){ sel=b.dataset.id; render(); } };
-  const d=document.getElementById('detail2');
-  if(!sel){ d.innerHTML='<span class="muted">Выберите функцию — здесь появятся её файлы по ярусам.</span>'; return; }
-  d.innerHTML = `<h4>${esc(fname(sel))} — файлы по ярусам</h4><div class="cols">${TIERS.map(t=>{ const fs=D.cells[t.id+'|'+sel]||[]; const n=cnt(t.id,sel);
-    return `<div><h5 style="color:${tv(t.id)}">${t.name} · ${n}</h5>${fs.length?fs.map(x=>`<code>${esc(x)}</code>`).join('')+(n>fs.length?`<code class="muted">…ещё ${n-fs.length}</code>`:''):'<code class="muted">—</code>'}</div>`; }).join('')}</div>`;
+  const {W,H}=size(); const S=Math.min(W-600,H-40); const ox=276+(W-276-320-S)/2, oy=(H-S)/2;
+  const data={name:'Map',children:TIERS.map(t=>({name:t.name,tier:t.id,children:FEATS.map(f=>({name:f.name,f:f.id,tier:t.id,children:files.filter(x=>x.t===t.id&&x.f===f.id).map(x=>({...x,value:x.m+2}))})).filter(f=>f.children.length)}))};
+  const root=d3.pack().size([S,S]).padding(d=>d.depth===0?14:d.depth===1?8:2)(d3.hierarchy(data).sum(d=>d.value||0).sort((a,b)=>b.value-a.value));
+  const svg=d3.select(canvas).append('svg').attr('viewBox',`0 0 ${W} ${H}`); const g=svg.append('g');
+  let focus=root, vw=[root.x,root.y,root.r*2];
+  const node=g.selectAll('circle').data(root.descendants().slice(1)).join('circle')
+    .attr('fill',d=>d.depth===1?TC[d.data.tier]+'14':d.depth===2?FC[d.data.f]+'2a':FC[d.data.f])
+    .attr('stroke',d=>d.depth===1?TC[d.data.tier]:d.depth===2?FC[d.data.f]+'88':'none').attr('stroke-width',d=>d.depth===1?1.5:1)
+    .attr('opacity',d=>!sel||d.depth===1||d.data.f===sel?1:.18).style('cursor',d=>d.children?'pointer':'default')
+    .on('click',(e,d)=>{ if(d.children&&focus!==d){ zoom(d); e.stopPropagation(); } })
+    .on('mousemove',(e,d)=>showTip(e,d.depth===3?fileTip(d.data):`<b>${esc(d.data.name)}</b><span>${d.leaves().length} файлов${d.depth===2?' · '+tname(d.data.tier):''}</span>`)).on('mouseleave',hideTip);
+  const label=g.selectAll('text').data(root.descendants().slice(1).filter(d=>d.depth<=2)).join('text').attr('text-anchor','middle').attr('pointer-events','none')
+    .attr('font-weight',d=>d.depth===1?700:500).attr('fill','#eef1f7');
+  svg.on('click',()=>zoom(root));
+  function zoomTo(v){ const k=S/v[2]; vw=v;
+    node.attr('transform',d=>`translate(${ox+(d.x-v[0])*k+S/2},${oy+(d.y-v[1])*k+S/2})`).attr('r',d=>d.r*k);
+    label.attr('transform',d=>`translate(${ox+(d.x-v[0])*k+S/2},${oy+(d.y-v[1])*k+S/2-(d.depth===1?d.r*k-18:0)})`)
+      .attr('font-size',d=>d.depth===1?15:12).text(d=>d.data.name)
+      .attr('opacity',d=>{ const r=d.r*k; const fits=d.depth===1? r>60 : (d.parent===focus||d.parent===focus.parent&&focus.depth===2) && r>d.data.name.length*3.6+6; return fits?1:0; }); }
+  function zoom(d){ focus=d; const t=svg.transition().duration(650); t.tween('zoom',()=>{const i=d3.interpolateZoom(vw,[d.x,d.y,d.r*2]);return t=>zoomTo(i(t));}); }
+  zoomTo([root.x,root.y,root.r*2]);
+  setInfo('Пузыри', `<h2>Из чего состоит программа</h2><p>Большие круги — ярусы, внутри — функции, точки — файлы (размер — сколько в файле функций). Нажмите на круг, чтобы приблизить; на фон — чтобы отдалить.</p>`);
 }
 
+// 3 · code city: isometric blocks; districts = tiers, building = file (footprint ~ code size, height ~ functions)
 function v3(){
-  const max = Math.max(...TIERS.flatMap(t=>feats.map(f=>cnt(t.id,f.id))));
-  document.getElementById('cards').innerHTML = feats.map(f=>{ const tt=total(f.id); const used=TIERS.filter(t=>cnt(t.id,f.id)).length;
-    return `<button class="card" data-id="${f.id}" aria-pressed="${sel===f.id}">
-      <header><b><span style="color:${FCOL[f.id]}">●</span> ${esc(f.name)}</b><span>${tt} ${plural(tt,'файл','файла','файлов')}</span></header>
-      <div class="mini">${TIERS.map(t=>{ const n=cnt(t.id,f.id); return `<div><span>${t.name}</span><span class="track"><i style="width:${n?Math.max(4,100*n/max):0}%;background:${tv(t.id)}"></i></span><em>${n||'·'}</em></div>`; }).join('')}</div>
-      <span class="hint">${used===5?'Сквозная: задевает все пять ярусов':used===1?'Живёт на одном ярусе':'Задевает '+used+' '+plural(used,'ярус','яруса','ярусов')}</span></button>`; }).join('');
-  document.getElementById('cards').onclick = e => { const b=e.target.closest('.card'); if(b){ sel = sel===b.dataset.id?null:b.dataset.id; render(); } };
+  const {W,H}=size(); const cv=document.createElement('canvas'); const dpr=devicePixelRatio||1; cv.width=W*dpr; cv.height=H*dpr; canvas.appendChild(cv);
+  const ctx=cv.getContext('2d'); ctx.scale(dpr,dpr);
+  const cell=Math.max(4,Math.min(9,(W-640)/150)); const iso=(x,y,z)=>[(x-y)*0.866, (x+y)*0.5 - z];
+  const blds=[]; let ox=0; const districts=[];
+  TIERS.forEach(t=>{ const fs=files.filter(f=>f.t===t.id).sort((a,b)=>FEATS.findIndex(x=>x.id===a.f)-FEATS.findIndex(x=>x.id===b.f)||b.loc-a.loc);
+    const cols=Math.ceil(Math.sqrt(fs.length)); fs.forEach((f,i)=>{ const gx=ox+(i%cols)*cell*1.6, gy=Math.floor(i/cols)*cell*1.6; const s=cell*(.5+.9*Math.min(1,Math.sqrt(f.loc/400))); blds.push({f,x:gx,y:gy,s,h:6+Math.sqrt(f.m)*cell*1.15}); });
+    districts.push({t,x:ox,w:cols*cell*1.6,d:Math.ceil(fs.length/cols)*cell*1.6}); ox+=cols*cell*1.6+cell*5; });
+  const span=iso(ox,0,0)[0]-iso(0,districts.reduce((a,d)=>Math.max(a,d.d),0),0)[0];
+  const offX=276+(W-276-320-span)/2+iso(0,districts.reduce((a,d)=>Math.max(a,d.d),0),0)[0]*-1, offY=H*0.42;
+  const P=(x,y,z)=>{const p=iso(x,y,z);return [p[0]+offX,p[1]+offY];};
+  districts.forEach(d=>{ ctx.beginPath(); [[d.x-cell,-cell],[d.x+d.w,-cell],[d.x+d.w,d.d],[d.x-cell,d.d]].forEach(([x,y],i)=>{const p=P(x,y,0); i?ctx.lineTo(...p):ctx.moveTo(...p);}); ctx.closePath(); ctx.fillStyle=TC[d.t.id]+'1c'; ctx.fill(); ctx.strokeStyle=TC[d.t.id]+'66'; ctx.stroke();
+    const lp=P(d.x+d.w/2,d.d+cell*3,0); ctx.fillStyle=TC[d.t.id]; ctx.font='600 14px Golos Text, sans-serif'; ctx.textAlign='center'; ctx.fillText(d.t.name,lp[0],lp[1]); });
+  blds.sort((a,b)=>(a.x+a.y)-(b.x+b.y));
+  const shade=(hex,k)=>{const c=d3.color(hex);return (k>0?c.brighter(k):c.darker(-k)).formatHex();};
+  blds.forEach(b=>{ const c=FC[b.f.f]; const dim=sel&&b.f.f!==sel; ctx.globalAlpha=dim?.16:1;
+    const {x,y,s,h}=b; const top=[P(x,y,h),P(x+s,y,h),P(x+s,y+s,h),P(x,y+s,h)]; const left=[P(x,y+s,0),P(x+s,y+s,0),P(x+s,y+s,h),P(x,y+s,h)]; const right=[P(x+s,y,0),P(x+s,y+s,0),P(x+s,y+s,h),P(x+s,y,h)];
+    [[left,shade(c,-1.1)],[right,shade(c,-.5)],[top,shade(c,.25)]].forEach(([pts,col])=>{ctx.beginPath();pts.forEach((p,i)=>i?ctx.lineTo(...p):ctx.moveTo(...p));ctx.closePath();ctx.fillStyle=col;ctx.fill();});
+    b.top=top; }); ctx.globalAlpha=1;
+  const inside=(pt,poly)=>{let c=false;for(let i=0,j=poly.length-1;i<poly.length;j=i++){const [xi,yi]=poly[i],[xj,yj]=poly[j];if(((yi>pt[1])!==(yj>pt[1]))&&(pt[0]<(xj-xi)*(pt[1]-yi)/(yj-yi)+xi))c=!c;}return c;};
+  cv.onmousemove=e=>{const r=cv.getBoundingClientRect(); const pt=[e.clientX-r.left,e.clientY-r.top]; for(let i=blds.length-1;i>=0;i--){ const b=blds[i]; const box=[b.top[0],b.top[1],P(b.x+b.s,b.y+b.s,0),P(b.x,b.y+b.s,0)]; if(inside(pt,b.top)||inside(pt,[b.top[1],b.top[2],P(b.x+b.s,b.y+b.s,0),P(b.x+b.s,b.y,0)])||inside(pt,[b.top[3],b.top[2],P(b.x+b.s,b.y+b.s,0),P(b.x,b.y+b.s,0)])){showTip(e,fileTip(b.f));return;} } hideTip();};
+  cv.onmouseleave=hideTip;
+  setInfo('Город кода', `<h2>Программа как город</h2><p>Кварталы — ярусы. Дом — файл: площадь — объём кода, высота — сколько в нём функций, цвет — к какой функции относится. Высокие дома — самые нагруженные места. Наведите на дом.</p>`);
 }
 
+// 4 · sun: zoomable sunburst tier > feature > file
 function v4(){
-  const weeks = Object.keys(D.weekCommits);
-  // insert the real gap (no commits 8 Sep – 12 Oct)
-  const html=[]; const fmt=w=>new Date(w).toLocaleDateString('ru-RU',{day:'numeric',month:'long'});
-  const maxSum = Math.max(...weeks.map(w=>Object.values(D.weeks[w]||{}).reduce((a,b)=>a+b,0)));
-  weeks.forEach((w,i)=>{
-    if(i>0 && (new Date(w)-new Date(weeks[i-1]))>8*864e5) html.push(`<div class="week gap"><h4>${fmt(new Date(+new Date(weeks[i-1])+7*864e5))} – ${fmt(new Date(+new Date(w)-864e5))}</h4><span class="muted">Перерыв: сохранений кода не было ни в одной ветке.</span></div>`);
-    const fs = D.weeks[w]||{}; const sum=Object.values(fs).reduce((a,b)=>a+b,0)||1;
-    const st = D.stages.filter(s=>{const d=new Date(s.date), a=new Date(w); return d>=a && d<new Date(+a+7*864e5);});
-    const order = feats.filter(f=>fs[f.id]).sort((a,b)=>fs[b.id]-fs[a.id]);
-    html.push(`<div class="week"><h4>Неделя с ${fmt(w)}</h4><div class="total">${D.weekCommits[w]}<small>${plural(D.weekCommits[w],'сохранение','сохранения','сохранений')}</small></div>
-      <div class="vstack" style="height:${Math.max(40,170*sum/maxSum)}px">${order.map(f=>`<i style="height:${100*fs[f.id]/sum}%;background:${!sel||sel===f.id?FCOL[f.id]:'#3a4150'};border-top:1px solid var(--panel)" title="${esc(f.name)}: ${fs[f.id]}"></i>`).join('')}</div>
-      <div class="wlist">${order.slice(0,5).map(f=>`<span style="opacity:${!sel||sel===f.id?1:.5}"><b><i style="color:${FCOL[f.id]};font-style:normal">●</i> ${esc(f.name)}</b><em>${fs[f.id]}</em></span>`).join('')||'<span>Функции из списка не менялись</span>'}${order.length>5?`<span>…и ещё ${order.length-5}</span>`:''}</div>
-      ${st.length?`<div class="stages-head">Закрыто этапов: ${st.length}</div><div class="stages">${st.map(s=>`<span title="${esc(s.name)}">${s.key}</span>`).join('')}</div>`:''}</div>`);
-  });
-  document.getElementById('weeks').innerHTML = html.join('');
+  const {W,H}=size(); const R=Math.min(W-620,H-40)/2; const cx=276+(W-276-320)/2, cy=H/2;
+  const data={name:'Map',children:TIERS.map(t=>({name:t.name,tier:t.id,children:FEATS.map(f=>({name:f.name,f:f.id,tier:t.id,children:files.filter(x=>x.t===t.id&&x.f===f.id).map(x=>({...x,name:x.n,value:Math.max(20,x.loc)}))})).filter(f=>f.children.length)}))};
+  const root=d3.partition().size([2*Math.PI,3])(d3.hierarchy(data).sum(d=>d.value||0).sort((a,b)=>b.value-a.value)); root.each(d=>d.current=d);
+  const ring=R/3.2; const arc=d3.arc().startAngle(d=>d.x0).endAngle(d=>d.x1).padAngle(d=>Math.min((d.x1-d.x0)/2,.004)).padRadius(R).innerRadius(d=>d.y0*ring+ring*.55).outerRadius(d=>Math.max(d.y0*ring+ring*.55,d.y1*ring+ring*.55-2)).cornerRadius(2);
+  const svg=d3.select(canvas).append('svg').attr('viewBox',`0 0 ${W} ${H}`); const g=svg.append('g').attr('transform',`translate(${cx},${cy})`);
+  const col=d=>d.depth===1?TC[d.data.tier]:FC[d.data.f]; const vis=d=>d.y1<=3&&d.y0>=1&&d.x1>d.x0;
+  const path=g.append('g').selectAll('path').data(root.descendants().slice(1)).join('path').attr('fill',col)
+    .attr('fill-opacity',d=>vis(d.current)?(d.depth===3?.55:.9)*(!sel||d.depth===1||d.data.f===sel?1:.2):0).attr('d',d=>arc(d.current)).style('cursor',d=>d.children?'pointer':'default')
+    .on('click',(e,d)=>d.children&&clicked(d)).on('mousemove',(e,d)=>showTip(e,d.depth===3?fileTip(d.data):`<b>${esc(d.data.name)}</b><span>${d.leaves().length} файлов</span>`)).on('mouseleave',hideTip);
+  const lab=g.append('g').attr('pointer-events','none').attr('text-anchor','middle').selectAll('text').data(root.descendants().slice(1)).join('text').attr('dy','.35em').attr('fill','#0d1017').attr('font-weight',600).attr('font-size',12).text(d=>d.data.name);
+  const center=g.append('circle').attr('r',ring*.5).attr('fill','#ffffff08').style('cursor','pointer').on('click',()=>clicked(focus.parent||root));
+  const ctext=g.append('text').attr('text-anchor','middle').attr('fill','#eef1f7').attr('font-weight',600).attr('font-size',15).attr('dy','.35em');
+  let focus=root;
+  const labelOk=d=>{ const a=(d.x1-d.x0)*((d.y0+d.y1)/2*ring+ring*.55); return vis(d)&&d.y0<3&&a>d.data.name.length*7+8; };
+  const labelT=d=>{ const x=(d.x0+d.x1)/2*180/Math.PI, y=(d.y0+d.y1)/2*ring+ring*.55; return `rotate(${x-90}) translate(${y},0) rotate(${x<180?0:180})`; };
+  function update(){ lab.attr('opacity',d=>labelOk(d.current)?1:0).attr('transform',d=>labelT(d.current)); ctext.text(focus===root?'Map':focus.data.name); }
+  function clicked(p){ focus=p; root.each(d=>d.target={x0:Math.max(0,Math.min(1,(d.x0-p.x0)/(p.x1-p.x0)))*2*Math.PI,x1:Math.max(0,Math.min(1,(d.x1-p.x0)/(p.x1-p.x0)))*2*Math.PI,y0:Math.max(0,d.y0-p.depth),y1:Math.max(0,d.y1-p.depth)});
+    const t=svg.transition().duration(650);
+    path.transition(t).tween('data',d=>{const i=d3.interpolate(d.current,d.target);return t=>d.current=i(t);}).attrTween('d',d=>()=>arc(d.current)).attr('fill-opacity',d=>vis(d.target)?(d.depth===3?.55:.9)*(!sel||d.depth===1||d.data.f===sel?1:.2):0);
+    lab.transition(t).attrTween('transform',d=>()=>labelT(d.current)).attr('opacity',d=>labelOk(d.target)?1:0); ctext.text(p===root?'Map':p.data.name); }
+  update();
+  setInfo('Солнце', `<h2>Кольца программы</h2><p>Внутреннее кольцо — ярусы, среднее — функции, внешнее — файлы (ширина — объём кода). Нажмите на сектор — он раскроется на весь круг. Центр — шаг назад.</p>`);
 }
 
-let ci = 0;
+// 5 · flows: ribbons tier -> feature, width = files
 function v5(){
-  const btns=document.getElementById('btns');
-  btns.innerHTML = D.chains.map((c,i)=>`<button data-i="${i}" aria-pressed="${i===ci}">«${esc(c.label)}»</button>`).join('');
-  btns.onclick = e => { const b=e.target.closest('button'); if(b){ ci=+b.dataset.i; v5(); } };
-  const chain = D.chains[ci].chain;
-  const cells = TIERS.map(t=>`<div class="lane-h" style="--c:${tv(t.id)}">${t.name}</div>`);
-  chain.forEach((s,k)=>{ const col=TIERS.findIndex(t=>t.id===s.tier)+1;
-    cells.push(`<div class="step" style="--col:${col};--c:${tv(s.tier)}"><span class="k">Шаг ${k+1}${k===0?' · кнопка':''}</span><b>${esc(k===0?s.name:(s.type+'.'+s.name))}</b><small>${esc(s.file)}${s.line?':'+s.line:''}</small>${k?`<span class="from">↑ вызывается из шага ${k}${chain[k-1].tier!==s.tier?' · переход на ярус «'+TIERS.find(t=>t.id===s.tier).name+'»':''}</span>`:''}</div>`); });
-  document.getElementById('lanes').innerHTML = cells.join('');
+  const {W,H}=size(); const x0=276+60, x1=W-320-60-150, top=60, h=H-120, gap=14;
+  const svg=d3.select(canvas).append('svg').attr('viewBox',`0 0 ${W} ${H}`);
+  const flows=[]; TIERS.forEach(t=>FEATS.forEach(f=>{const n=files.filter(x=>x.t===t.id&&x.f===f.id).length; if(n) flows.push({t:t.id,f:f.id,n});}));
+  const total=files.length, k=(h-gap*(FEATS.length-1))/total;
+  const L={}, Rn={}; let y=top; TIERS.forEach(t=>{const n=files.filter(x=>x.t===t.id).length; L[t.id]={y,h:n*k,off:0,n}; y+=n*k+gap*(FEATS.length-1)/(TIERS.length-1);});
+  y=top; FEATS.forEach(f=>{const n=nF(f.id); Rn[f.id]={y,h:n*k,off:0,n}; y+=n*k+gap;});
+  const defs=svg.append('defs');
+  flows.sort((a,b)=>TIERS.findIndex(t=>t.id===a.t)-TIERS.findIndex(t=>t.id===b.t)||FEATS.findIndex(f=>f.id===a.f)-FEATS.findIndex(f=>f.id===b.f));
+  flows.forEach((fl,i)=>{ const a=L[fl.t], b=Rn[fl.f]; const w=fl.n*k; const ya=a.y+a.off, yb=b.y+b.off; a.off+=w; b.off+=w;
+    const gid='gr'+i; const gr=defs.append('linearGradient').attr('id',gid).attr('x1','0%').attr('x2','100%'); gr.append('stop').attr('offset','0%').attr('stop-color',TC[fl.t]); gr.append('stop').attr('offset','100%').attr('stop-color',FC[fl.f]);
+    const xa=x0+14, xb=x1, xm=(xa+xb)/2;
+    svg.append('path').attr('d',`M${xa},${ya} C${xm},${ya} ${xm},${yb} ${xb},${yb} L${xb},${yb+w} C${xm},${yb+w} ${xm},${ya+w} ${xa},${ya+w} Z`)
+      .attr('fill',`url(#${gid})`).attr('opacity',!sel||sel===fl.f?.55:.07)
+      .on('mousemove',e=>showTip(e,`<b>${tname(fl.t)} → ${esc(fname(fl.f))}</b><span>${fl.n} ${plural(fl.n,'файл','файла','файлов')}</span>`)).on('mouseleave',hideTip); });
+  TIERS.forEach(t=>{ const a=L[t.id]; svg.append('rect').attr('x',x0).attr('y',a.y).attr('width',14).attr('height',Math.max(2,a.h)).attr('rx',4).attr('fill',TC[t.id]);
+    svg.append('text').attr('x',x0-10).attr('y',a.y+a.h/2).attr('dy','.35em').attr('text-anchor','end').attr('fill','#eef1f7').attr('font-weight',600).attr('font-size',14).text(t.name);
+    svg.append('text').attr('x',x0-10).attr('y',a.y+a.h/2+17).attr('text-anchor','end').attr('fill','#9aa3b5').attr('font-size',12).text(a.n+' '+plural(a.n,'файл','файла','файлов')); });
+  FEATS.forEach(f=>{ const b=Rn[f.id]; svg.append('rect').attr('x',x1).attr('y',b.y).attr('width',10).attr('height',Math.max(2,b.h)).attr('rx',3).attr('fill',FC[f.id]);
+    svg.append('text').attr('x',x1+18).attr('y',b.y+b.h/2).attr('dy','.35em').attr('fill',!sel||sel===f.id?'#eef1f7':'#5f687a').attr('font-weight',500).attr('font-size',13).style('cursor','pointer').text(`${fname(f.id)} · ${b.n}`).on('click',()=>{sel=sel===f.id?null:f.id;draw();}); });
+  setInfo('Потоки', `<h2>Как ярусы питают функции</h2><p>Слева — ярусы, справа — функции. Лента показывает, сколько файлов яруса работает на функцию; её толщина — количество. Видно, какие функции держатся на интерфейсе, а какие — на ядре или движке.</p>`);
 }
 
-const tabs=[...document.querySelectorAll('[role=tab]')];
-let cur='1'; try{ cur = localStorage.getItem('pmv2') || '1'; }catch(e){}
-tabs.forEach(t=>t.onclick=()=>{ cur=t.dataset.v; try{localStorage.setItem('pmv2',cur)}catch(e){} render(); });
-function render(){
-  tabs.forEach(t=>t.setAttribute('aria-selected', t.dataset.v===cur));
-  document.querySelectorAll('.view').forEach(v=>v.hidden = v.id!=='v'+cur);
-  [...chips.children].forEach(b=>b.setAttribute('aria-pressed', b.dataset.id===sel));
-  ({1:v1,2:v2,3:v3,4:v4,5:v5})[cur]();
+// 6 · time (weeks)
+function v6(){
+  page.hidden=false; const weeks=Object.keys(D.weekCommits); const fmt=w=>new Date(w).toLocaleDateString('ru-RU',{day:'numeric',month:'long'}); const html=[];
+  const maxSum=Math.max(...weeks.map(w=>Object.values(D.weeks[w]||{}).reduce((a,b)=>a+b,0)));
+  weeks.forEach((w,i)=>{ if(i&&(new Date(w)-new Date(weeks[i-1]))>8*864e5) html.push(`<div class="week gap"><h4>${fmt(new Date(+new Date(weeks[i-1])+7*864e5))} – ${fmt(new Date(+new Date(w)-864e5))}</h4><span style="color:var(--muted);font-size:13px">Перерыв: сохранений кода не было ни в одной ветке.</span></div>`);
+    const fs=D.weeks[w]||{}; const sum=Object.values(fs).reduce((a,b)=>a+b,0)||1; const st=D.stages.filter(s=>{const d=new Date(s.date),a=new Date(w);return d>=a&&d<new Date(+a+7*864e5);});
+    const order=D.features.filter(f=>fs[f.id]).sort((a,b)=>fs[b.id]-fs[a.id]);
+    html.push(`<div class="week"><h4>Неделя с ${fmt(w)}</h4><div class="total">${D.weekCommits[w]}<small>${plural(D.weekCommits[w],'сохранение','сохранения','сохранений')}</small></div>
+      <div class="vstack" style="height:${Math.max(40,160*sum/maxSum)}px">${order.map(f=>`<i style="height:${100*fs[f.id]/sum}%;background:${!sel||sel===f.id?FC[f.id]:'#323a4a'}"></i>`).join('')}</div>
+      <div class="wlist">${order.slice(0,5).map(f=>`<span style="opacity:${!sel||sel===f.id?1:.5}"><b><i style="color:${FC[f.id]};font-style:normal">●</i> ${esc(f.name)}</b><em>${fs[f.id]}</em></span>`).join('')}${order.length>5?`<span>…и ещё ${order.length-5}</span>`:''}</div>
+      ${st.length?`<span style="font-size:12px;color:var(--muted)">Закрыто этапов: ${st.length}</span><div class="stages">${st.map(s=>`<span title="${esc(s.name)}">${s.key}</span>`).join('')}</div>`:''}</div>`); });
+  page.innerHTML=`<h2>Лента времени</h2><p class="lead">Неделя за неделей: сколько было сохранений кода, какие функции менялись и какие этапы закрыты.</p><div class="weeks">${html.join('')}</div>`;
+  setInfo('Время', `<h2>${D.stages.length} этапов дорожной карты</h2><p>Выберите функцию слева — в каждой неделе подсветится её доля.</p>`);
 }
-render();
+// 7 · from a button
+let ci=0;
+function v7(){
+  page.hidden=false; const c=D.chains[ci].chain;
+  const cells=TIERS.map(t=>`<div class="lane-h" style="--c:${TC[t.id]}">${t.name}</div>`);
+  c.forEach((s,k)=>{ const col=TIERS.findIndex(t=>t.id===s.tier)+1; cells.push(`<div class="step" style="--col:${col};--c:${TC[s.tier]}"><span class="k">Шаг ${k+1}${k===0?' · кнопка':''}</span><b>${esc(k===0?s.name:(s.type+'.'+s.name))}</b><small>${esc(s.file)}${s.line?':'+s.line:''}</small>${k?`<span class="from">↑ из шага ${k}${c[k-1].tier!==s.tier?' · на ярус «'+tname(s.tier)+'»':''}</span>`:''}</div>`); });
+  page.innerHTML=`<h2>От кнопки до кода</h2><p class="lead">Путь работы кнопки через ярусы — по связям кода (projmap), возможный путь, а не запись запуска.</p><div class="pathwrap"><div class="btns">${D.chains.map((x,i)=>`<button data-i="${i}" aria-pressed="${i===ci}">«${esc(x.label)}»</button>`).join('')}</div><div class="lanes">${cells.join('')}</div></div>`;
+  page.querySelector('.btns').onclick=e=>{const b=e.target.closest('button');if(b){ci=+b.dataset.i;v7();}};
+  setInfo('От кнопки', `<h2>«${esc(D.chains[ci].label)}»</h2><p>${c.length} ${plural(c.length,'шаг','шага','шагов')}, ${new Set(c.map(x=>x.tier)).size} ${plural(new Set(c.map(x=>x.tier)).size,'ярус','яруса','ярусов')}.</p>`);
+}
+const tabs=[...document.querySelectorAll('[role=tab]')];
+tabs.forEach(t=>t.onclick=()=>{view=t.dataset.v;try{localStorage.setItem('pmv3',view)}catch(e){}draw();});
+try{view=localStorage.getItem('pmv3')||'1'}catch(e){}
+function draw(){ tabs.forEach(t=>t.setAttribute('aria-selected',t.dataset.v===view)); [...chips.children].forEach(b=>b.setAttribute('aria-pressed',b.dataset.id===sel));
+  canvas.innerHTML=''; page.hidden=true; hideTip(); ({1:v1,2:v2,3:v3,4:v4,5:v5,6:v6,7:v7})[view](); }
+let rt; addEventListener('resize',()=>{clearTimeout(rt);rt=setTimeout(draw,150);});
+(document.fonts?document.fonts.ready:Promise.resolve()).then(draw);
 </script>
