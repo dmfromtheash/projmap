@@ -15,7 +15,7 @@
   </div>
   <div class="tools">
     <div class="seg" id="viewSeg" title="Что показывать">
-      <button data-view="map" class="active">Схема</button><button data-view="tree">Подробное древо</button><button data-view="plan">План</button><button data-view="db">База данных</button><button data-view="file" class="hidden">Файл</button>
+      <button data-view="map" class="active">Схема</button><button data-view="tree">Подробное древо</button><button data-view="plan">План</button><button data-view="db">База данных</button><button data-view="links" title="Ярусы и функции программы и связи между ними">Схема связей</button><button data-view="file" class="hidden">Файл</button>
     </div>
     <div class="seg" id="depthSeg" title="Глубина раскрытия">
       <button data-depth="1">Модули</button><button data-depth="2">Папки</button><button data-depth="3">Файлы</button><button data-depth="4">Классы</button>
@@ -58,6 +58,8 @@
   <section id="stage">
     <div id="crumbs"></div>
     <div id="cy"></div>
+    <div id="lv" class="hidden"></div>
+    <div id="lvBar" class="hidden"></div>
     <div id="edgeChips" class="floating chips"></div>
     <div id="legend" class="floating legend"></div>
     <div id="hint" class="floating hint">Двойной клик — раскрыть/свернуть · клик — подробности · правый клик — меню</div>
@@ -98,5 +100,6 @@
 <script src="edgelayer.js"></script>
 <script src="treeview.js"></script>
 <script src="fileview.js"></script>
+<script src="linkview.js"></script>
 </body>
 </html>

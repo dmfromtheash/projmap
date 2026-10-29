@@ -128,6 +128,7 @@ function onHost(m) {
         send({ type: 'loaded' }); // lets the host start the background rescan only now
       }).catch(err => { hideProgress(); toast('Не удалось загрузить схему: ' + err.message, 6000); send({ type: 'loaded' }); });
       break;
+    case 'viewsOverrides': LV.overrides = m.overrides || {}; LV.overridesRoot = m.root; break;
     case 'changed':
       for (const p of m.paths || []) S.changed.set(p.toLowerCase(), Date.now());
       break;
@@ -512,6 +513,7 @@ function blocksUnder(id) {
 // The old picture stays on screen while ELK works.
 function render({ fit = false, anchor = null } = {}) {
   if (!S.model) return;
+  if (S.view === 'links') { lvRender({ keepView: !fit }); return; }
   const fresh = cy.elements().empty();
   let els = buildElements();
   if (S.focus && els.some(e => e.data.id === S.focus)) els = focusElements(els, S.focus);
@@ -1283,6 +1285,7 @@ function tabs(defs) {
 function renderDetails() {
   const M = S.model, el = $('#details');
   if (!M) { el.innerHTML = ''; return; }
+  if (S.view === 'links') return lvDetails();
   const id = S.selected;
   if (!id) return renderOverview();
   if (M.rmById.has(id)) return renderRoadmapDetails(M.rmById.get(id));
@@ -1650,7 +1653,7 @@ systemDark.addEventListener('change', () => {
   cy.style(buildStyle());
   if (S.model) { render({ animate: false }); renderTree(); renderDetails(); renderHot(); }
 });
-$('#btnFit').onclick =() => smoothView({ fit: { eles: diagramNodes(), padding: 40 } });
+$('#btnFit').onclick = () => S.view === 'links' ? lvFitView() : smoothView({ fit: { eles: diagramNodes(), padding: 40 } });
 $('#btnRescan').onclick = () => { send({ type: 'rescan' }); showProgress('Сканирование…', 0.02); };
 $('#btnLive').onclick = () => { S.live = !S.live; send({ type: 'setLive', on: S.live }); syncToolbar(); toast(S.live ? 'Живое обновление включено' : 'Живое обновление выключено'); };
 $('#btnOpen').onclick = () => $('#start').classList.remove('hidden');
@@ -1664,6 +1667,11 @@ document.addEventListener('keydown', e => {
   const typing = e.target instanceof Element && e.target.matches('input, textarea');
   if ((e.ctrlKey && e.key.toLowerCase() === 'k') || (!typing && e.key === '/')) { e.preventDefault(); $('#search').focus(); $('#search').select(); return; }
   if (typing) return;
+  if (S.view === 'links') {
+    if (e.key === 'f' || e.key === 'F') lvFitView();
+    if ((e.key === 'Escape' || e.key === 'Backspace') && LV.stack.length) lvBack();
+    return;
+  }
   if (e.key === 'Escape') { if (S.focus) setFocus(S.focus); else select(null); hideCtx(); }
   if (e.key === 'f' || e.key === 'F') smoothView({ fit: { eles: diagramNodes(), padding: 40 } });
   if (e.key === 'Enter' && S.selected && S.model.byId.has(S.selected)) toggle(S.selected, true);

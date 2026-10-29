@@ -7,6 +7,7 @@ const VIEW_HINT = {
   plan: 'Клик по задаче — какие части кода она затрагивает · фильтр статусов — слева, вкладка «План»',
   db: 'Таблицы, связи между ними и файлы, которые их читают или пишут · двойной клик по файлу — на схему',
   file: 'Функции файла: стрелка — вызов или обращение к полю/свойству · клик — показать код · двойной клик по внешнему — открыть тот файл',
+  links: 'Наведите на блок — его связи · нажмите — что внутри · пустое место — шаг назад · колесо — приближение · F — всё',
 };
 
 function setView(v) {
@@ -20,10 +21,15 @@ function setView(v) {
   $('#hint').textContent = VIEW_HINT[v];
   $('#stage').classList.toggle('with-code', v === 'file');
   $('#code').classList.toggle('hidden', v !== 'file');
+  // «Схема связей» draws its own picture over the stage (linkview.js)
+  for (const id of ['#lv', '#lvBar']) $(id).classList.toggle('hidden', v !== 'links');
+  for (const id of ['#cy', '#crumbs', '#legend']) $(id).classList.toggle('hidden', v === 'links');
   if (v === 'file' && !FV.file) { S.view = null; setView('map'); return; }
   if (v === 'plan' || v === 'db') switchTab(v);
   else if (document.querySelector('#sideTabs .active')?.dataset.tab !== 'hot') switchTab('tree');
   S.focus = null;
+  if (v === 'links') setBusy(false); // no «laying out…» of the view we just left
+  layoutSeq++; // a picture of the previous view still being put on screen in parts must not continue
   cy.elements().remove();
   cy.resize(); // the code pane changes the canvas width
   render({ fit: true });
