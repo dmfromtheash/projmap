@@ -480,6 +480,8 @@ function lvDetails(selId) {
   if (!D) { el.innerHTML = `<div class="card"><h3>Схема связей</h3><p class="why">Нужен новый скан: нажмите ⟳.</p></div>`; return; }
   const cur = LV.stack[LV.stack.length - 1];
   const sc = LV.scene;
+  if (!cur && LV.mode === 'time') return svTimeDetails(D, el);
+  if (!cur && LV.mode === 'path') return svPathDetails(D, el);
   if (!cur) {
     const v = D.v, files = v.assignments.length, sure = v.assignments.filter(a => a.decision === 'automatic' || a.decision === 'override').length;
     el.innerHTML = `<div class="card head"><span class="kind">вид</span><h2>${esc(SV_MODES.find(m => m[0] === LV.mode)?.[1] || 'Связи')}</h2>

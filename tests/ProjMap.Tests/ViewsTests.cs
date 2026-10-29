@@ -220,6 +220,50 @@ public sealed class ViewsTests
         Assert.True(GraphDiff.Compare(full, again).Views.Same);
     }
 
+    [Fact]
+    public async Task TimelineLinksStagesByProgressTableFirstThenBySubject()
+    {
+        using var repo = new FixtureRepository();
+        repo.Write("App/App.csproj", Project);
+        repo.Write("ROADMAP.md", "# План\n\n- [x] R1 Печать постером\n- [ ] R2 Атлас\n");
+        repo.Write("App/Poster.cs", "namespace Demo; public class Poster { }");
+        await repo.Git("add", "-A"); await repo.Git("commit", "-q", "-m", "feat: poster printing");
+        var sha = (await GitOut(repo.Root, "rev-parse", "HEAD")).Trim();
+        repo.Write("App/Atlas.cs", "namespace Demo; public class Atlas { }");
+        repo.Write("App/Poster.cs", "namespace Demo; public class Poster { public int Size; }");
+        await repo.Git("add", "-A"); await repo.Git("commit", "-q", "-m", "feat(R2): atlas, R1 mentioned in passing");
+        // the progress table names the R1 commit explicitly: that wins over the subject of the second commit
+        repo.Write("PROGRESS.md", $"| Этап | Коммиты |\n|---|---|\n| R1 Печать | {sha[..7]} |\n");
+        await repo.Git("add", "-A"); await repo.Git("commit", "-q", "-m", "docs: progress");
+        var g = await ProjectScanner.ScanAsync(new(repo.Root));
+        var t = g.Views!.Timeline!;
+        Assert.Equal(3, t.Commits.Count);
+        Assert.Contains("3 коммитов", t.Coverage);
+        var r1 = Assert.Single(t.Stages, s => s.Key == "R1");
+        Assert.Equal("explicit", r1.Link);
+        Assert.Equal([sha], r1.CommitIds);
+        Assert.Equal("Печать постером", r1.Title);
+        var r2 = Assert.Single(t.Stages, s => s.Key == "R2");
+        Assert.Equal("subject", r2.Link);
+        var r2Files = t.Commits.Single(c => r2.CommitIds.Contains(c.Id)).Files.Select(i => t.Files[i]).Order().ToList();
+        Assert.Equal(["file:App/Atlas.cs", "file:App/Poster.cs"], r2Files);
+        // without git there is no timeline, and the rest of the views still work
+        repo.DisableGit();
+        var noGit = await ProjectScanner.ScanAsync(new(repo.Root));
+        Assert.Null(noGit.Views!.Timeline);
+        Assert.NotEmpty(noGit.Views.Assignments);
+    }
+
+    private static async Task<string> GitOut(string root, params string[] args)
+    {
+        using var p = new System.Diagnostics.Process { StartInfo = new("git") { WorkingDirectory = root, RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true } };
+        foreach (var a in args) p.StartInfo.ArgumentList.Add(a);
+        p.Start();
+        var output = await p.StandardOutput.ReadToEndAsync();
+        await p.WaitForExitAsync();
+        return output;
+    }
+
     [Theory]
     [InlineData("src/**/*.cs", "src/a/b/C.cs", true)]
     [InlineData("src/**/*.cs", "src/C.cs", true)]

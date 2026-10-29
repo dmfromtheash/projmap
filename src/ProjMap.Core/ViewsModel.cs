@@ -17,7 +17,27 @@ public sealed record ViewsInfo
     public List<FeatureMembership> Memberships { get; init; } = [];
     /// Manual corrections that no longer match anything (renamed/deleted node, unknown feature). Never re-targeted silently.
     public List<string> StaleOverrides { get; init; } = [];
+    /// Commits of the scanned window and roadmap stages linked to them; null without git history.
+    public TimelineInfo? Timeline { get; init; }
 }
+
+/// <summary>History inside the scan window: what changed when, and which stage did it. Only paths that exist today
+/// are listed (deleted files are not); `Coverage` says how far back the window goes.</summary>
+public sealed record TimelineInfo
+{
+    public required string Coverage { get; init; }
+    /// File node ids referenced by index from <see cref="TimelineCommit.Files"/>.
+    public List<string> Files { get; init; } = [];
+    /// Newest first, as git log lists them.
+    public List<TimelineCommit> Commits { get; init; } = [];
+    public List<TimelineStage> Stages { get; init; } = [];
+}
+
+public sealed record TimelineCommit(string Id, DateTimeOffset At, string Subject, List<int> Files);
+
+/// <param name="Link">`explicit` — the commit is named next to the stage key in a document (a progress table);
+/// `subject` — the key appears in the commit subject. Explicit links win when a stage has any.</param>
+public sealed record TimelineStage(string Key, string Title, string Status, List<string> CommitIds, string Link);
 
 public sealed record TierInfo(string Id, string Name, string Description);
 

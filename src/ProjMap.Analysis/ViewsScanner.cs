@@ -159,8 +159,72 @@ internal sealed class ViewsScanner : IRepositoryScanner
             Features = finalFeatures,
             Memberships = memberships.OrderBy(m => m.FeatureId, StringComparer.Ordinal).ThenBy(m => m.NodeId, StringComparer.Ordinal).ToList(),
             StaleOverrides = stale.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList(),
+            Timeline = Timeline(c, ct),
         };
         return Task.CompletedTask;
+    }
+
+    // ---- timeline ----
+
+    static readonly Regex Sha = new(@"(?<![0-9a-f])[0-9a-f]{7,40}(?![0-9a-z])", RegexOptions.CultureInvariant);
+
+    static TimelineInfo? Timeline(ScanContext c, CancellationToken ct)
+    {
+        if (c.Commits.Count == 0) return null;
+        var files = new List<string>();
+        var index = new Dictionary<string, int>(StringComparer.Ordinal);
+        int Index(string path)
+        {
+            var id = ScanContext.FileId(path);
+            if (!index.TryGetValue(id, out var i)) { index[id] = i = files.Count; files.Add(id); }
+            return i;
+        }
+        var commits = c.Commits.Select(x => new TimelineCommit(x.Hash, x.CommittedAt, x.Subject, x.Files.Select(Index).ToList())).ToList();
+
+        // stages: roadmap items with a key (R13, DEC-071 …); the first one with a known status per key
+        var items = c.Graph.Roadmap.Select(r => (Item: r, Key: RoadmapScanner.ItemKey(r.Title))).Where(x => x.Key != null)
+            .GroupBy(x => x.Key!, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.OrderBy(x => x.Item.Status == RoadmapStatus.Unknown ? 1 : 0).First()).ToList();
+        var stages = new List<TimelineStage>();
+        if (items.Count > 0)
+        {
+            var keys = new Regex(@"(?<![\p{L}\p{N}])(?<k>" + string.Join("|", items.Select(x => Regex.Escape(x.Key!)).OrderByDescending(k => k.Length)) + @")(?![\p{L}\p{N}])",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            var explicitLinks = new Dictionary<string, SortedSet<string>>(StringComparer.OrdinalIgnoreCase);
+            // a line naming exactly one stage and some commit hashes (a progress table row) links them explicitly
+            foreach (var doc in c.Files.Values.Where(f => f.Language == "Markdown").OrderBy(f => f.Path, StringComparer.Ordinal))
+            {
+                ct.ThrowIfCancellationRequested();
+                if (doc.Text(c) is not { } text) continue;
+                foreach (var line in text.Split('\n'))
+                {
+                    if (line.Length > 2000 || !Sha.IsMatch(line)) continue;
+                    var found = keys.Matches(line).Select(m => m.Groups["k"].Value).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                    if (found.Count != 1) continue;
+                    foreach (Match h in Sha.Matches(line))
+                        foreach (var commit in c.Commits.Where(x => x.Hash.StartsWith(h.Value, StringComparison.Ordinal)))
+                            (explicitLinks.TryGetValue(found[0], out var set) ? set : explicitLinks[found[0]] = new(StringComparer.Ordinal)).Add(commit.Hash);
+                }
+            }
+            var subjectLinks = new Dictionary<string, SortedSet<string>>(StringComparer.OrdinalIgnoreCase);
+            foreach (var commit in c.Commits)
+                foreach (var key in keys.Matches(commit.Subject).Select(m => m.Groups["k"].Value).Distinct(StringComparer.OrdinalIgnoreCase))
+                    (subjectLinks.TryGetValue(key, out var set) ? set : subjectLinks[key] = new(StringComparer.Ordinal)).Add(commit.Hash);
+            foreach (var (item, key) in items.OrderBy(x => x.Item.Source?.Path, StringComparer.Ordinal).ThenBy(x => x.Item.Source?.Line))
+            {
+                var title = Regex.Replace(item.Title, @"^[\s*_`#\[]*" + Regex.Escape(key!) + @"[\s:.\-—–·)\]]*", "").Trim();
+                var (ids, link) = explicitLinks.TryGetValue(key!, out var e) ? (e, "explicit") : subjectLinks.TryGetValue(key!, out var s) ? (s, "subject") : (null, "none");
+                stages.Add(new TimelineStage(key!, title.Length > 0 ? title : item.Title, item.Status, ids?.ToList() ?? [], link));
+            }
+        }
+        var oldest = c.Commits.Min(x => x.CommittedAt);
+        return new TimelineInfo
+        {
+            Coverage = $"{c.Commits.Count} коммитов с {oldest:yyyy-MM-dd} (окно {c.Options.GitMonths} мес., не больше {c.Options.MaxCommits}); удалённые с тех пор файлы не показаны",
+            Files = files,
+            Commits = commits,
+            Stages = stages,
+        };
     }
 
     // ---- tiers ----
