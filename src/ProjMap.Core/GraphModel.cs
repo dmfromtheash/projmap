@@ -22,6 +22,7 @@ public sealed record ProjectGraph
     public List<ScanWarning> Warnings { get; init; } = [];
     /// Optional projection layer (tiers, features); absent in graphs written before it existed.
     public ViewsInfo? Views { get; init; }
+    public ProblemsInfo? Problems { get; init; }
 }
 
 public sealed record ProjectInfo
@@ -186,6 +187,7 @@ public static class GraphJson
         if (graph.Database != null) Property("database", graph.Database);
         Property("warnings", graph.Warnings);
         if (graph.Views != null) Property("views", graph.Views);
+        if (graph.Problems != null) Property("problems", graph.Problems);
         await writer.FlushAsync(ct).ConfigureAwait(false);
         if (graph.Project.Timings is { } timings)
             timings.Milliseconds["serialization"] = System.Diagnostics.Stopwatch.GetElapsedTime(start).TotalMilliseconds;
@@ -230,6 +232,7 @@ public static class GraphJson
             database = g.Database,
             warnings = g.Warnings,
             views = g.Views,
+            problems = g.Problems,
         };
         return JsonSerializer.SerializeToUtf8Bytes(doc, Options);
     }

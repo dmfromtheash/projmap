@@ -14,10 +14,11 @@ namespace ProjMap.Cli
         {
             try
             {
-                if (args.Length < 2 || args[0] is not ("scan" or "stats" or "diff"))
+                if (args.Length < 2 || args[0] is not ("scan" or "stats" or "diff" or "report"))
                 {
                     await error.WriteLineAsync("Usage: projmap-cli scan <root> [-o <file>] [--git-months N] [--no-members] [--timings] [--views-overrides <file>]\n       projmap-cli stats <graph.json>\n" +
-                                               "       projmap-cli diff <a.json> <b.json> [--ignore-git] [--ignore-positions] [--limit N] [-o <report.json>]");
+                                               "       projmap-cli diff <a.json> <b.json> [--ignore-git] [--ignore-positions] [--limit N] [-o <report.json>]\n" +
+                                               "       projmap-cli report <root> [-o <file.json>] [--md <file.md>] [--views-overrides <file>]");
                     return 2;
                 }
                 if (args[0] == "diff") return await DiffAsync(args, output, ct);
@@ -38,13 +39,15 @@ namespace ProjMap.Cli
                     return 0;
                 }
                 var root = Path.GetFullPath(args[1]);
-                string? destination = null;
+                var report = args[0] == "report";
+                string? destination = null; string? markdown = null;
                 var months = 12; var members = true; var timings = false; ViewsOverrides? overrides = null;
                 for (var i = 2; i < args.Length; i++)
                 {
                     switch (args[i])
                     {
                         case "-o" when i + 1 < args.Length: destination = Path.GetFullPath(args[++i]); break;
+                        case "--md" when report && i + 1 < args.Length: markdown = Path.GetFullPath(args[++i]); break;
                         case "--git-months" when i + 1 < args.Length:
                             if (!int.TryParse(args[++i], NumberStyles.None, CultureInfo.InvariantCulture, out months) || months < 0 || months > 1200)
                                 throw new ArgumentException("--git-months must be an integer from 0 to 1200.");
@@ -58,7 +61,9 @@ namespace ProjMap.Cli
                         default: throw new ArgumentException("Unknown or incomplete option: " + args[i]);
                     }
                 }
-                destination ??= Path.Combine(root, ".projmap", "graph.json");
+                if (!report) destination ??= Path.Combine(root, ".projmap", "graph.json");
+                if (destination != null && markdown != null && string.Equals(destination, markdown, StringComparison.OrdinalIgnoreCase))
+                    throw new ArgumentException("JSON and Markdown outputs must be different files.");
                 var graphResult = await ProjectScanner.ScanAsync(new(root)
                 {
                     GitMonths = months,
@@ -66,8 +71,28 @@ namespace ProjMap.Cli
                     ViewOverrides = overrides,
                     Progress = new InlineProgress(p => error.WriteLine($"[{p.Fraction:P0}] {p.Stage} {p.Detail}"))
                 }, ct);
-                Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-                await using (var stream = new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.None, 65536, useAsync: true))
+                if (report)
+                {
+                    var json = System.Text.Json.JsonSerializer.Serialize(graphResult.Problems!, GraphJson.Options);
+                    if (destination == null) await output.WriteLineAsync(json);
+                    else
+                    {
+                        Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+                        await File.WriteAllTextAsync(destination, json, ct);
+                        await output.WriteLineAsync(destination);
+                    }
+                    if (markdown != null)
+                    {
+                        Directory.CreateDirectory(Path.GetDirectoryName(markdown)!);
+                        await File.WriteAllTextAsync(markdown, ProblemsMarkdown.Render(graphResult), ct);
+                    }
+                    foreach (var warning in graphResult.Warnings.Take(20))
+                        await error.WriteLineAsync($"Warning [{warning.Scanner}] {warning.Path}: {warning.Message}");
+                    return 0;
+                }
+                var scanDestination = destination!;
+                Directory.CreateDirectory(Path.GetDirectoryName(scanDestination)!);
+                await using (var stream = new FileStream(scanDestination, FileMode.Create, FileAccess.Write, FileShare.None, 65536, useAsync: true))
                     await GraphJson.WriteAsync(graphResult, stream, ct);
                 await output.WriteLineAsync($"{destination}\n{graphResult.Nodes.Count} nodes, {graphResult.Edges.Count} edges; {graphResult.Project.ScanMilliseconds} ms; {graphResult.Warnings.Count} warnings");
                 foreach (var warning in graphResult.Warnings.Take(20)) await error.WriteLineAsync($"Warning [{warning.Scanner}] {warning.Path}: {warning.Message}");
