@@ -15,8 +15,9 @@ internal sealed class GitScanner : IRepositoryScanner
             GitBranch = branch.ExitCode == 0 ? branch.Output.Trim() : null };
         if (head.ExitCode != 0 || c.Options.GitMonths == 0 || c.Options.MaxCommits == 0) return;
         var log = await GitProcess.RunAsync(c.Options.Root, ct, "log", "--no-renames", "--no-ext-diff", "--name-only", "-z",
-            "--format=%x1e%H%x00%aI%x00%aN <%aE>%x00%s%x00", "--since=" + DateTimeOffset.UtcNow.AddMonths(-c.Options.GitMonths).ToString("O", CultureInfo.InvariantCulture),
+            "--format=%x1e%H%x00%aI%x00%aN <%aE>%x00%s%x00%cI%x00", "--since=" + DateTimeOffset.UtcNow.AddMonths(-c.Options.GitMonths).ToString("O", CultureInfo.InvariantCulture),
             "--max-count=" + c.Options.MaxCommits.ToString(CultureInfo.InvariantCulture), "--", ".");
+        c.Counts["git.logRuns"] = 1;
         if (log.ExitCode != 0) { c.Warn(Name, log.Error.Trim()); return; }
         var touches = new Dictionary<string, List<GitCommit>>(StringComparer.Ordinal);
         var pairs = new Dictionary<(string A, string B), int>();
@@ -27,11 +28,12 @@ internal sealed class GitScanner : IRepositoryScanner
         {
             ct.ThrowIfCancellationRequested();
             var parts = section.Split('\0');
-            if (parts.Length < 4 || !DateTimeOffset.TryParse(parts[1], CultureInfo.InvariantCulture, DateTimeStyles.None, out var date)) continue;
-            var allFiles = parts.Skip(4).Select(p => p.TrimStart('\r', '\n')).Where(p => p.Length > 0).Distinct().ToList();
+            if (parts.Length < 5 || !DateTimeOffset.TryParse(parts[1], CultureInfo.InvariantCulture, DateTimeStyles.None, out var date) ||
+                !DateTimeOffset.TryParse(parts[4], CultureInfo.InvariantCulture, DateTimeStyles.None, out var committedAt)) continue;
+            var allFiles = parts.Skip(5).Select(p => p.TrimStart('\r', '\n')).Where(p => p.Length > 0).Distinct().ToList();
             var files = allFiles.Select(p => c.Relative(Path.Combine(gitRoot, p))).Where(c.Files.ContainsKey)
                 .Select(p => c.Files[p].Path).Distinct().Order(StringComparer.Ordinal).ToList();
-            var commit = new GitCommit(parts[0], parts[3], parts[2], date, files);
+            var commit = new GitCommit(parts[0], parts[3], parts[2], date, files, committedAt);
             c.Commits.Add(commit);
             foreach (var path in files)
             {

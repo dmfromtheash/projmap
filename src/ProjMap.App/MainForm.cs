@@ -30,6 +30,8 @@ sealed class MainForm : Form
     bool _live = true;
     bool _scanning;
     bool _rescanQueued;
+    ScanState? _scanState;
+    readonly HashSet<string> _queuedScanPaths = new(StringComparer.OrdinalIgnoreCase);
 
     public MainForm(LaunchOptions opt)
     {
@@ -195,6 +197,8 @@ sealed class MainForm : Form
         }
         _scanCts?.Cancel();
         _root = root;
+        _scanState = null;
+        _queuedScanPaths.Clear();
         _graphJson = null;
         _graphHash = null;
         Text = $"projmap — {Path.GetFileName(root)}";
@@ -225,24 +229,29 @@ sealed class MainForm : Form
         _ = ScanAsync();
     }
 
-    async Task ScanAsync()
+    async Task ScanAsync(IEnumerable<string>? changedPaths = null)
     {
         if (_root == null) return;
+        if (changedPaths != null) _queuedScanPaths.UnionWith(changedPaths);
         if (_scanning) { _rescanQueued = true; return; }
         _scanning = true;
         _scanCts = new CancellationTokenSource();
         var root = _root;
+        var paths = _queuedScanPaths.ToArray();
+        _queuedScanPaths.Clear();
         var progress = new Progress<ScanProgress>(p => Post(new { type = "progress", stage = p.Stage, fraction = p.Fraction, detail = p.Detail }));
         try
         {
             var sw = Stopwatch.StartNew();
-            var graph = await Task.Run(() => ProjectScanner.ScanAsync(new ScanOptions(root) { Progress = progress }, _scanCts.Token));
+            var result = await Task.Run(() => ProjectScanner.ScanAsync(new ScanOptions(root) { Progress = progress }, _scanState, paths, _scanCts.Token));
             if (root != _root) return;
+            _scanState = result.State;
+            var graph = result.Graph;
             // the scan time stamp changes every run; compare the content without it
             var (json, hash) = await Task.Run(() =>
             {
                 var bytes = GraphJson.SerializeCompact(graph);
-                var stable = GraphJson.Serialize(graph with { Project = graph.Project with { ScannedAt = default, ScanMilliseconds = 0 } });
+                var stable = GraphJson.Serialize(graph with { Project = graph.Project with { ScannedAt = default, ScanMilliseconds = 0, Timings = null } });
                 return (bytes, Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(stable))));
             });
             Directory.CreateDirectory(Path.GetDirectoryName(AppStore.CachePath(root))!);
@@ -284,7 +293,7 @@ sealed class MainForm : Form
         _watcher.Changed += h;
         _watcher.Created += h;
         _watcher.Deleted += h;
-        _watcher.Renamed += (_, e) => OnFsEvent(e.FullPath);
+        _watcher.Renamed += (_, e) => { OnFsEvent(e.OldFullPath); OnFsEvent(e.FullPath); };
         _watcher.Error += (_, _) => OnFsEvent(root);
         _watcher.EnableRaisingEvents = true;
     }
@@ -305,16 +314,17 @@ sealed class MainForm : Form
         var rel = Path.GetRelativePath(root, fullPath);
         var parts = rel.Split(Path.DirectorySeparatorChar);
         if (parts[0] == ".git")
-            return parts.Length > 1 && (parts[1] == "HEAD" || parts[1] == "refs"); // commits and branch switches
+            return parts.Length > 1 && (parts[1] == "HEAD" || parts[1] == "refs" || parts[1] == "packed-refs"); // commits and branch switches
         return !parts.Any(p => IgnoredDirs.Contains(p, StringComparer.OrdinalIgnoreCase));
     }
 
     void OnFilesSettled()
     {
-        var changed = _pendingChanges.Where(p => !p.StartsWith(".git/")).Take(50).ToArray();
+        var paths = _pendingChanges.ToArray();
+        var changed = paths.Where(p => !p.StartsWith(".git/")).Take(50).ToArray();
         _pendingChanges.Clear();
         Post(new { type = "changed", paths = changed });
-        _ = ScanAsync();
+        _ = ScanAsync(paths);
     }
 
     // ---- shell actions ----

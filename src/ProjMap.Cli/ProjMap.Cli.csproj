@@ -10,6 +10,13 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <!-- Roslyn allocates heavily while binding files in parallel. Bound the server GC heaps
+         to keep its throughput without one heap per logical CPU on memory-limited desktops. -->
+    <ServerGarbageCollection>true</ServerGarbageCollection>
   </PropertyGroup>
+
+  <ItemGroup>
+    <RuntimeHostConfigurationOption Include="System.GC.HeapCount" Value="4" />
+  </ItemGroup>
 
 </Project>

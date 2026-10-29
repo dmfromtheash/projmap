@@ -16,7 +16,7 @@ namespace ProjMap.Cli
             {
                 if (args.Length < 2 || args[0] is not ("scan" or "stats"))
                 {
-                    await error.WriteLineAsync("Usage: projmap-cli scan <root> [-o <file>] [--git-months N] [--no-members]\n       projmap-cli stats <graph.json>");
+                    await error.WriteLineAsync("Usage: projmap-cli scan <root> [-o <file>] [--git-months N] [--no-members] [--timings]\n       projmap-cli stats <graph.json>");
                     return 2;
                 }
                 if (args[0] == "stats")
@@ -37,7 +37,7 @@ namespace ProjMap.Cli
                 }
                 var root = Path.GetFullPath(args[1]);
                 string? destination = null;
-                var months = 12; var members = true;
+                var months = 12; var members = true; var timings = false;
                 for (var i = 2; i < args.Length; i++)
                 {
                     switch (args[i])
@@ -48,6 +48,7 @@ namespace ProjMap.Cli
                                 throw new ArgumentException("--git-months must be an integer from 0 to 1200.");
                             break;
                         case "--no-members": members = false; break;
+                        case "--timings": timings = true; break;
                         default: throw new ArgumentException("Unknown or incomplete option: " + args[i]);
                     }
                 }
@@ -55,9 +56,13 @@ namespace ProjMap.Cli
                 var graphResult = await ProjectScanner.ScanAsync(new(root) { GitMonths = months, IncludeMembers = members,
                     Progress = new InlineProgress(p => error.WriteLine($"[{p.Fraction:P0}] {p.Stage} {p.Detail}")) }, ct);
                 Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-                await File.WriteAllTextAsync(destination, GraphJson.Serialize(graphResult), ct);
+                await using (var stream = new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.None, 65536, useAsync: true))
+                    await GraphJson.WriteAsync(graphResult, stream, ct);
                 await output.WriteLineAsync($"{destination}\n{graphResult.Nodes.Count} nodes, {graphResult.Edges.Count} edges; {graphResult.Project.ScanMilliseconds} ms; {graphResult.Warnings.Count} warnings");
                 foreach (var warning in graphResult.Warnings.Take(20)) await error.WriteLineAsync($"Warning [{warning.Scanner}] {warning.Path}: {warning.Message}");
+                if (timings)
+                    foreach (var (stage, ms) in graphResult.Project.Timings!.Milliseconds)
+                        await output.WriteLineAsync($"  {stage}: {ms.ToString("F3", CultureInfo.InvariantCulture)} ms");
                 var ignore = Path.Combine(root, ".gitignore");
                 if (File.Exists(ignore) && !(await File.ReadAllTextAsync(ignore, ct)).Split('\n').Any(l => l.Trim().TrimStart('/') is ".projmap/" or ".projmap"))
                     await error.WriteLineAsync("Hint: add .projmap/ to .gitignore to exclude generated scan output.");
