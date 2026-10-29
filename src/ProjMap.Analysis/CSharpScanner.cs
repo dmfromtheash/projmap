@@ -92,7 +92,7 @@ internal sealed class CSharpScanner : IRepositoryScanner
             try
             {
                 var configuration = string.Join('\n', module.Id, module.ImplicitUsings, string.Join(';', module.Defines),
-                    string.Join(';', module.References));
+                    string.Join(';', module.References), string.Join(';', c.Graph.Nodes[module.Id].Tags));
                 var old = previous?.Units.GetValueOrDefault(module.Id);
                 if (old?.Configuration != configuration) old = null;
                 var results = old == null ? new Dictionary<string, FileAnalysis>(StringComparer.Ordinal) : new(old.Results, StringComparer.Ordinal);

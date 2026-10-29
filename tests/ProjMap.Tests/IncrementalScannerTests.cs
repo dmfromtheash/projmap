@@ -92,6 +92,18 @@ public sealed class IncrementalScannerTests
     }
 
     [Fact]
+    public async Task ChangingProjectTestMetadataRefreshesCachedSourceTags()
+    {
+        using var repo = new FixtureRepository(); Populate(repo);
+        var result = await ProjectScanner.ScanAsync(new(repo.Root), null, null);
+        repo.Write("Core/Core.csproj", Project.Replace("</PropertyGroup>", "<IsTestProject>true</IsTestProject></PropertyGroup>"));
+        result = await ProjectScanner.ScanAsync(new(repo.Root), result.State, ["Core/Core.csproj"]);
+        Assert.Equal(Stable(await ProjectScanner.ScanAsync(new(repo.Root))), Stable(result.Graph));
+        Assert.All(result.Graph.Nodes.Where(n => n.Kind is NodeKinds.Type or NodeKinds.Member && n.Path!.StartsWith("Core/")),
+            n => Assert.Contains("test", n.Tags));
+    }
+
+    [Fact]
     public async Task CaseOnlyRenamesRefreshGraphIdsAndCachedMentions()
     {
         using var repo = new FixtureRepository(); Populate(repo);
