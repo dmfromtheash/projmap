@@ -482,6 +482,7 @@ function lvDetails(selId) {
   const sc = LV.scene;
   if (!cur && LV.mode === 'time') return svTimeDetails(D, el);
   if (!cur && LV.mode === 'path') return svPathDetails(D, el);
+  if (!cur && LV.mode === 'problems') return svProblemsDetails(D, el);
   if (!cur) {
     const v = D.v, files = v.assignments.length, sure = v.assignments.filter(a => a.decision === 'automatic' || a.decision === 'override').length;
     el.innerHTML = `<div class="card head"><span class="kind">вид</span><h2>${esc(SV_MODES.find(m => m[0] === LV.mode)?.[1] || 'Связи')}</h2>
