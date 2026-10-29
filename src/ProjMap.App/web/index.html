@@ -1,0 +1,101 @@
+﻿<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>projmap</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header id="top">
+  <div class="brand"><span id="projName">projmap</span><span id="projBranch" class="muted"></span></div>
+  <div class="search">
+    <input id="search" placeholder="Найти файл, класс, таблицу, задачу…  (Ctrl+K)" autocomplete="off" spellcheck="false">
+    <div id="searchResults" class="dropdown hidden"></div>
+  </div>
+  <div class="tools">
+    <div class="seg" id="viewSeg" title="Что показывать">
+      <button data-view="map" class="active">Схема</button><button data-view="tree">Подробное древо</button><button data-view="plan">План</button><button data-view="db">База данных</button><button data-view="file" class="hidden">Файл</button>
+    </div>
+    <div class="seg" id="depthSeg" title="Глубина раскрытия">
+      <button data-depth="1">Модули</button><button data-depth="2">Папки</button><button data-depth="3">Файлы</button><button data-depth="4">Классы</button>
+    </div>
+    <button id="btnFit" class="icon" title="Показать всё (F)">⤢</button>
+    <button id="btnLive" class="toggle on" title="Живое обновление при изменении файлов">● Живо</button>
+    <button id="btnRescan" class="icon" title="Пересканировать">⟳</button>
+    <button id="btnOpen" class="icon" title="Открыть другой проект">📂</button>
+  </div>
+</header>
+
+<div id="progress" class="hidden"><div class="bar"></div><span class="label"></span></div>
+
+<main>
+  <aside id="side">
+    <nav class="tabs" id="sideTabs">
+      <button data-tab="tree" class="active">Структура</button>
+      <button data-tab="plan">План</button>
+      <button data-tab="db">БД</button>
+      <button data-tab="hot">Горячие</button>
+    </nav>
+    <div class="tabpane active" id="tab-tree">
+      <input class="filter" id="treeFilter" placeholder="Фильтр по имени…">
+      <div id="tree" class="tree"></div>
+    </div>
+    <div class="tabpane" id="tab-plan">
+      <div class="chips" id="planChips"></div>
+      <div id="plan" class="plan"></div>
+    </div>
+    <div class="tabpane" id="tab-db"><div id="db"></div></div>
+    <div class="tabpane" id="tab-hot">
+      <div class="tabintro">Подсветка на схеме: чем ярче блок, тем больше его меняют / тем он сложнее / больше / связаннее.</div>
+      <div class="seg small" id="hotSeg">
+        <button data-sort="commits" class="active">Изменения</button><button data-sort="complexity">Сложность</button><button data-sort="loc">Размер</button><button data-sort="links">Связи</button>
+      </div>
+      <div id="hot" class="hot"></div>
+    </div>
+  </aside>
+
+  <section id="stage">
+    <div id="crumbs"></div>
+    <div id="cy"></div>
+    <div id="edgeChips" class="floating chips"></div>
+    <div id="legend" class="floating legend"></div>
+    <div id="hint" class="floating hint">Двойной клик — раскрыть/свернуть · клик — подробности · правый клик — меню</div>
+    <div id="ctx" class="dropdown hidden"></div>
+    <div id="busy" class="hidden"><i></i><span></span></div>
+    <div id="code" class="hidden">
+      <div class="code-head">
+        <span id="codePath" class="path"></span>
+        <button id="codeOpen" title="Открыть этот файл во внешнем редакторе (VS Code)">Во внешнем редакторе</button>
+        <button id="codeClose" title="Вернуться к схеме">✕ Закрыть файл</button>
+      </div>
+      <div class="code-hint muted">Клик по функции на схеме — её код подсвечивается здесь · двойной клик по строке — найти функцию на схеме</div>
+      <div id="codeBody"></div>
+    </div>
+  </section>
+
+  <aside id="details"></aside>
+</main>
+
+<div id="start" class="overlay hidden">
+  <div class="card">
+    <h1><span class="logo">◈</span> projmap</h1>
+    <p class="muted">Карта проекта: модули, файлы, связи, дорожная карта и база данных.</p>
+    <button id="btnPick" class="primary">Открыть папку проекта…</button>
+    <h3>Недавние</h3>
+    <div id="recent"></div>
+  </div>
+</div>
+
+<div id="toast" class="hidden"></div>
+
+<script src="vendor/cytoscape.min.js"></script>
+<script src="vendor/elk-api.js"></script>
+<script src="glossary.js"></script>
+<script src="model.js"></script>
+<script src="views.js"></script>
+<script src="app.js"></script>
+<script src="treeview.js"></script>
+<script src="fileview.js"></script>
+</body>
+</html>
