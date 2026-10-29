@@ -19,6 +19,12 @@ public sealed record ScanProgress(string Stage, double Fraction, string? Detail 
 public static class ProjectScanner
 {
     public static async Task<ProjectGraph> ScanAsync(ScanOptions options, CancellationToken ct = default)
+        => (await ScanAsync(options, null, null, ct).ConfigureAwait(false)).Graph;
+
+    /// <summary>Rescans with immutable in-memory state. Explicit changed paths force analysis even
+    /// when content is unchanged. Hashes also detect edits missing from the watcher event list.</summary>
+    public static async Task<ScanResult> ScanAsync(ScanOptions options, ScanState? previousState,
+        IEnumerable<string>? changedPaths, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentException.ThrowIfNullOrWhiteSpace(options.Root);
@@ -27,7 +33,15 @@ public static class ProjectScanner
         var root = Path.GetFullPath(options.Root);
         if (!Directory.Exists(root)) throw new DirectoryNotFoundException(root);
         var watch = Stopwatch.StartNew();
-        var context = new ScanContext(options with { Root = root });
+        options = options with { Root = root };
+        if (previousState?.Matches(options) != true) previousState = null;
+        var context = new ScanContext(options) { Previous = previousState };
+        context.ForcedPaths.UnionWith((changedPaths ?? []).Select(p => context.Relative(Path.IsPathRooted(p) ? p : context.Full(p))));
+        var state = new ScanState(options);
+        context.State = state;
+        var sameContent = false;
+        var samePaths = false;
+        var sameGit = false;
         IRepositoryScanner[] scanners = [new StructureScanner(), new CSharpScanner(), new ImportScanner(),
             new GitScanner(), new RoadmapScanner(), new DatabaseScanner(), new DescriptionScanner()];
         for (var i = 0; i < scanners.Length; i++)
@@ -35,14 +49,51 @@ public static class ProjectScanner
             ct.ThrowIfCancellationRequested();
             var scanner = scanners[i];
             options.Progress?.Report(new(scanner.Name, (double)i / scanners.Length));
-            try { await Task.Run(() => scanner.ScanAsync(context, ct), ct).ConfigureAwait(false); }
+            using var timing = context.Measure(scanner.Name);
+            try
+            {
+                if (scanner.Name is "imports" or "roadmap" or "database" or "descriptions" && sameContent &&
+                    (scanner.Name != "roadmap" || sameGit) &&
+                    previousState!.Stages.TryGetValue(scanner.Name, out var cached))
+                    cached.Apply(context, scanner.Name);
+                else if (scanner.Name == "git")
+                {
+                    var fingerprint = context.IsGit ? GitCache.FingerprintFor(root) : "no-git";
+                    if (samePaths && previousState?.Git is { } git && git.Fingerprint == fingerprint && DateTimeOffset.UtcNow < git.ExpiresAt)
+                    { git.Apply(context); sameGit = true; }
+                    else await Task.Run(() => scanner.ScanAsync(context, ct), ct).ConfigureAwait(false);
+                    state.Git = GitCache.Capture(context, fingerprint);
+                }
+                else await Task.Run(() => scanner.ScanAsync(context, ct), ct).ConfigureAwait(false);
+                if (scanner.Name == "structure")
+                {
+                    foreach (var file in context.Files.Values)
+                    {
+                        ct.ThrowIfCancellationRequested();
+                        state.Hashes[file.Path] = ScanState.Hash(file, context);
+                    }
+                    // Lookup follows Windows casing, but graph ids retain exact path spelling.
+                    samePaths = previousState != null && state.Hashes.Count == previousState.Hashes.Count &&
+                        state.Hashes.Keys.ToHashSet(StringComparer.Ordinal).SetEquals(previousState.Hashes.Keys);
+                    sameContent = samePaths && state.Hashes.All(p => previousState!.Hashes[p.Key] == p.Value);
+                }
+                if (scanner.Name is "imports" or "roadmap" or "database" or "descriptions")
+                    state.Stages[scanner.Name] = StageOutput.Capture(context, scanner.Name);
+            }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception ex) { context.Warn(scanner.Name, ex.Message); }
         }
-        context.Finish();
-        context.Graph.Project = context.Graph.Project with { ScanMilliseconds = watch.ElapsedMilliseconds };
+        ProjectGraph graph;
+        using (context.Measure("finalize"))
+        {
+            context.Finish();
+            graph = context.Graph.ToGraph();
+        }
+        graph = graph with { Project = graph.Project with { ScanMilliseconds = watch.ElapsedMilliseconds,
+            Timings = new() { Milliseconds = context.Timings.OrderBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Value), Counts = context.Counts } } };
+        state.Reusable = graph.Warnings.Count == 0;
         options.Progress?.Report(new("complete", 1, $"{context.Graph.Nodes.Count} nodes"));
-        return context.Graph.ToGraph();
+        return new(graph, state);
     }
 }
 
@@ -74,6 +125,21 @@ internal sealed class GraphBuilder(ProjectInfo project)
 
 internal sealed class ScanContext
 {
+    public ConcurrentDictionary<string, double> Timings { get; } = new(StringComparer.Ordinal);
+    public Dictionary<string, int> Counts { get; } = new(StringComparer.Ordinal);
+    public ScanState? Previous { get; init; }
+    public ScanState State { get; set; } = null!;
+    public HashSet<string> ForcedPaths { get; } = new(StringComparer.OrdinalIgnoreCase);
+    public IDisposable Measure(string name) => new Measurement(this, name);
+    private sealed class Measurement(ScanContext context, string name) : IDisposable
+    {
+        private readonly long start = Stopwatch.GetTimestamp();
+        public void Dispose()
+        {
+            var elapsed = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+            context.Timings.AddOrUpdate(name, elapsed, (_, old) => old + elapsed);
+        }
+    }
     public ScanOptions Options { get; }
     public GraphBuilder Graph { get; }
     public Dictionary<string, RepoFile> Files { get; } = new(StringComparer.OrdinalIgnoreCase);
@@ -99,6 +165,14 @@ internal sealed class ScanContext
         .OrderByDescending(m => m.Directory.Length).ThenBy(m => m.Manifest, StringComparer.Ordinal).FirstOrDefault();
     public void Warn(string scanner, string message, string? path = null) => Graph.Warnings.Enqueue(new(scanner, message, path));
     public void Add(Node node) => Graph.Nodes.TryAdd(node.Id, node);
+    public void AddDeclared(Node node) => Graph.Nodes.AddOrUpdate(node.Id, node, (_, old) =>
+        StringComparer.Ordinal.Compare(node.Path, old.Path) < 0 || node.Path == old.Path && node.Line < old.Line ? node : old);
+    public void Merge(Edge edge) => Graph.Edges.AddOrUpdate(edge.Id, edge, (_, old) => old with
+    {
+        Weight = old.Weight + edge.Weight,
+        Evidence = old.Evidence.Concat(edge.Evidence).Distinct().OrderBy(e => e.Path, StringComparer.Ordinal)
+            .ThenBy(e => e.Line).Take(3).ToList()
+    });
     public void Edge(string kind, string source, string target, SourceLocation? evidence = null, int weight = 1)
     {
         if (source == target) return;
@@ -202,7 +276,7 @@ internal sealed class RepoFile(string path, string fullPath, string? language, L
     }
 }
 
-internal sealed record GitCommit(string Hash, string Subject, string Author, DateTimeOffset Date, List<string> Files);
+internal sealed record GitCommit(string Hash, string Subject, string Author, DateTimeOffset Date, List<string> Files, DateTimeOffset CommittedAt);
 
 internal static class GitProcess
 {

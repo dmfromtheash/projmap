@@ -20,10 +20,15 @@ internal sealed class DescriptionScanner : IRepositoryScanner
             .ToArray();
         var targets = c.Graph.Nodes.Values
             .Where(n => (n.Kind is NodeKinds.Module or NodeKinds.Folder) && string.IsNullOrWhiteSpace(n.Summary))
-            .Select(n => (Node: n, Keys: Keys(n)))
-            .Where(t => t.Keys.Count > 0)
+            .Select(n => (Node: n, Keys: Keys(n).Select(key => (Key: key, Pattern: new Regex(
+                @"^[`*_\[]*" + Regex.Escape(key) + @"/?[`*_\]]*(?:\([^)]*\))?\s*(?:[—–:|=-]+|\s{2,})\s*(?<d>.+)$", RegexOptions.IgnoreCase))).ToArray()))
+            .Where(t => t.Keys.Length > 0)
             .ToList();
         if (targets.Count == 0) return Task.CompletedTask;
+
+        var initialPatterns = targets.SelectMany(t => t.Keys.Select(k => k.Key[0])).Distinct().ToDictionary(
+            ch => ch, ch => new Regex("^" + Regex.Escape(ch.ToString()) + "$", RegexOptions.IgnoreCase));
+        var byInitial = new Dictionary<char, (Node Node, string Key, Regex Pattern)[]>();
 
         var found = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var doc in docs)
@@ -34,18 +39,24 @@ internal sealed class DescriptionScanner : IRepositoryScanner
             {
                 if (raw.Length > 400) continue;
                 var line = raw.Trim().TrimStart('-', '*', '+', '|', ' ', '\t');
-                foreach (var (node, keys) in targets)
+                var prefix = line.TrimStart('`', '*', '_', '[');
+                if (prefix.Length == 0) continue;
+                if (!byInitial.TryGetValue(prefix[0], out var candidates))
+                {
+                    var first = prefix[0].ToString();
+                    candidates = targets.SelectMany(t => t.Keys.Where(k => k.Key[0] is '`' or '*' or '_' or '[' || initialPatterns[k.Key[0]].IsMatch(first))
+                        .Select(k => (t.Node, k.Key, k.Pattern))).ToArray();
+                    byInitial[prefix[0]] = candidates;
+                }
+                foreach (var (node, key, pattern) in candidates)
                 {
                     if (found.ContainsKey(node.Id)) continue;
-                    foreach (var key in keys)
-                    {
-                        var m = Regex.Match(line, @"^[`*_\[]*" + Regex.Escape(key) + @"/?[`*_\]]*(?:\([^)]*\))?\s*(?:[—–:|=-]+|\s{2,})\s*(?<d>.+)$", RegexOptions.IgnoreCase);
-                        if (!m.Success) continue;
-                        var d = Clean(m.Groups["d"].Value);
-                        if (d.Length < 12 || !d.Any(char.IsLetter)) continue;
-                        found[node.Id] = d;
-                        break;
-                    }
+                    if (key[0] is not ('`' or '*' or '_' or '[') && !prefix.StartsWith(key, StringComparison.CurrentCultureIgnoreCase)) continue;
+                    var m = pattern.Match(line);
+                    if (!m.Success) continue;
+                    var d = Clean(m.Groups["d"].Value);
+                    if (d.Length < 12 || !d.Any(char.IsLetter)) continue;
+                    found[node.Id] = d;
                 }
             }
             if (found.Count == targets.Count) break;

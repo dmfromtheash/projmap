@@ -31,6 +31,14 @@ public sealed record ProjectInfo
     public string? GitBranch { get; init; }
     public List<string> Languages { get; init; } = [];
     public long ScanMilliseconds { get; init; }
+    public ScanTimings? Timings { get; init; }
+}
+
+/// <summary>Elapsed milliseconds by stage; C# model time is summed across workers.</summary>
+public sealed record ScanTimings
+{
+    public Dictionary<string, double> Milliseconds { get; init; } = new(StringComparer.Ordinal);
+    public Dictionary<string, int> Counts { get; init; } = new(StringComparer.Ordinal);
 }
 
 public static class NodeKinds
@@ -154,6 +162,33 @@ public sealed record ScanWarning(string Scanner, string Message, string? Path = 
 
 public static class GraphJson
 {
+    /// <summary>Streams the graph without allocating a second graph-sized string. Project metadata
+    /// is written last so serialization timing covers the payload and its flush (excluding metadata).</summary>
+    public static async Task WriteAsync(ProjectGraph graph, Stream destination, CancellationToken ct = default)
+    {
+        var start = System.Diagnostics.Stopwatch.GetTimestamp();
+        using var writer = new Utf8JsonWriter(destination);
+        writer.WriteStartObject();
+        writer.WriteNumber("schemaVersion", graph.SchemaVersion);
+        void Property<T>(string name, T value)
+        {
+            ct.ThrowIfCancellationRequested();
+            writer.WritePropertyName(name);
+            JsonSerializer.Serialize(writer, value, Options);
+        }
+        Property("nodes", graph.Nodes);
+        Property("edges", graph.Edges);
+        Property("roadmap", graph.Roadmap);
+        if (graph.Database != null) Property("database", graph.Database);
+        Property("warnings", graph.Warnings);
+        await writer.FlushAsync(ct).ConfigureAwait(false);
+        if (graph.Project.Timings is { } timings)
+            timings.Milliseconds["serialization"] = System.Diagnostics.Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+        Property("project", graph.Project);
+        writer.WriteEndObject();
+        await writer.FlushAsync(ct).ConfigureAwait(false);
+    }
+
     public static readonly JsonSerializerOptions Options = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
