@@ -1,5 +1,7 @@
 # Промт для новой сессии: projmap — новые виды (реализация) + все хвосты projmap и Map
 
+> **Выполнен 2026-10-29; заменён `NEXT_SESSION_PROMPT_FINISH.md`** — этот файл справочный.
+
 Запускай новую сессию Claude Code из `C:\Projects\Map` (к этой папке привязана память владельца) и вставь:
 «Прочитай C:\Projects\projmap\docs\NEXT_SESSION_PROMPT_BUILD.md и выполняй всё, что написано после черты».
 
