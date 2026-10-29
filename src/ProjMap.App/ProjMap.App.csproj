@@ -9,7 +9,7 @@
     <AssemblyName>projmap</AssemblyName>
     <RootNamespace>ProjMap.App</RootNamespace>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
-    <Version>0.1.0</Version>
+    <Version>0.1.1</Version>
   </PropertyGroup>
 
   <ItemGroup>
