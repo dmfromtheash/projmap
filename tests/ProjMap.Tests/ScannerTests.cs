@@ -58,6 +58,38 @@ public sealed class ScannerTests
         Assert.Equal(graph.Edges.Select(e => (e.Id, e.Weight)), again.Edges.Select(e => (e.Id, e.Weight)));
     }
     [Fact]
+    public async Task UiHandlerLambdasBecomeNodesSoEachButtonShowsWhatItRuns()
+    {
+        using var repo = new FixtureRepository();
+        repo.Write("App/App.csproj", Project);
+        repo.Write("App/Panel.cs", """
+            namespace Sample;
+            public sealed class Button { public event System.EventHandler? Click; }
+            public static class Ui { public static Button TextButton(string name, string text, System.Action action) => new(); }
+            public sealed class Panel
+            {
+                public void Build(int[] xs)
+                {
+                    var up = Ui.TextButton("UpButton", "Наверх", () => Go());
+                    up.Click += (_, _) => Stop();
+                    var positive = xs.Where(x => x > 0).ToArray();
+                }
+                private void Go() {}
+                private void Stop() {}
+            }
+            """);
+        var graph = await ProjectScanner.ScanAsync(new(repo.Root) { GitMonths = 0 });
+        var handlers = graph.Nodes.Where(n => n.SubKind == "handler").ToList();
+        Assert.Equal(2, handlers.Count); // the LINQ lambda is not a UI handler
+        var up = Assert.Single(handlers, h => h.Name == "TextButton «UpButton · Наверх»");
+        var click = Assert.Single(handlers, h => h.Name == "up.Click");
+        Assert.Contains(graph.Edges, e => e.Kind == EdgeKinds.Call && e.Source == up.Id && e.Target.EndsWith(":M:Sample.Panel.Go"));
+        Assert.Contains(graph.Edges, e => e.Kind == EdgeKinds.Call && e.Source == click.Id && e.Target.EndsWith(":M:Sample.Panel.Stop"));
+        Assert.Contains(graph.Edges, e => e.Kind == EdgeKinds.Reference && e.Source.EndsWith(":M:Sample.Panel.Build(System.Int32[])") && e.Target == up.Id);
+        Assert.DoesNotContain(graph.Edges, e => e.Source.EndsWith(":M:Sample.Panel.Build(System.Int32[])") && e.Target.EndsWith(":M:Sample.Panel.Go"));
+    }
+
+    [Fact]
     public async Task RestoredNuGetPackagesAreReferencedSoLibraryCallbacksAreRecognized()
     {
         using var repo = new FixtureRepository();

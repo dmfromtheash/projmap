@@ -359,6 +359,20 @@ internal sealed class CSharpScanner : IRepositoryScanner
                 Tags = tags,
                 Metrics = new() { Members = 1, Complexity = Complexity(declaration) }
             });
+            foreach (var (lambda, id, label) in Handlers(declaration, "member:" + u.Module.Id + ":" + signature))
+                Add(new Node
+                {
+                    Id = id,
+                    Kind = NodeKinds.Member,
+                    SubKind = "handler",
+                    Name = label,
+                    ParentId = parent,
+                    Path = tree.FilePath,
+                    Line = Line(lambda),
+                    Language = "C#",
+                    Tags = [.. file.Tags, "handler"],
+                    Metrics = new() { Members = 1, Complexity = Complexity(lambda) }
+                });
         }
         foreach (var declaration in root.DescendantNodes().OfType<VariableDeclaratorSyntax>().Where(n => n.Parent?.Parent is FieldDeclarationSyntax or EventFieldDeclarationSyntax))
         {
@@ -384,6 +398,43 @@ internal sealed class CSharpScanner : IRepositoryScanner
                 Metrics = new() { Members = 1 }
             });
         }
+    }
+    // A UI handler is a lambda wired to a control: `Ui.TextButton("Up", "Наверх", () => …)` (an argument of a call that
+    // also passes a string literal — the control's name or text) or `button.Click += (_, _) => …`. Each becomes its own
+    // node, so "which button runs what" is visible instead of everything belonging to the method that builds the panel.
+    // Ids: the containing member's id + "#h<n>" in source order, stable while that member's handlers keep their order.
+    internal static List<(AnonymousFunctionExpressionSyntax Lambda, string Id, string Label)> Handlers(SyntaxNode declaration, string memberId)
+    {
+        var result = new List<(AnonymousFunctionExpressionSyntax, string, string)>();
+        foreach (var lambda in declaration.DescendantNodes().OfType<AnonymousFunctionExpressionSyntax>())
+        {
+            string? label = lambda.Parent switch
+            {
+                AssignmentExpressionSyntax a when a.IsKind(SyntaxKind.AddAssignmentExpression) && a.Right == lambda => a.Left.ToString(),
+                // The arguments before the lambda name the control (name, visible text); later ones are style classes.
+                ArgumentSyntax { Parent: ArgumentListSyntax { Parent: InvocationExpressionSyntax or ObjectCreationExpressionSyntax } list } arg =>
+                    list.Arguments.TakeWhile(x => x != arg).Select(x => x.Expression).ToArray() is var before
+                    && before.Any(IsText)
+                        ? Callee(list.Parent!) + " «" + string.Join(" · ", before.Where(e => IsText(e) || e is IdentifierNameSyntax or MemberAccessExpressionSyntax)
+                            .Take(2).Select(e => e is LiteralExpressionSyntax l ? l.Token.ValueText : e.ToString())) + "»"
+                        : null,
+                _ => null,
+            };
+            if (label == null) continue;
+            label = Regex.Replace(label, @"\s+", " ");
+            result.Add((lambda, memberId + "#h" + (result.Count + 1).ToString(System.Globalization.CultureInfo.InvariantCulture),
+                label.Length > 80 ? label[..80] + "…" : label));
+        }
+        return result;
+        static bool IsText(ExpressionSyntax e) => e.IsKind(SyntaxKind.StringLiteralExpression) || e is InterpolatedStringExpressionSyntax
+            || e is BinaryExpressionSyntax { RawKind: (int)SyntaxKind.AddExpression } b && (IsText(b.Left) || IsText(b.Right));
+        static string Callee(SyntaxNode call) => call switch
+        {
+            InvocationExpressionSyntax { Expression: MemberAccessExpressionSyntax m } => m.Name.Identifier.ValueText,
+            InvocationExpressionSyntax { Expression: SimpleNameSyntax n } => n.Identifier.ValueText,
+            ObjectCreationExpressionSyntax o => "new " + o.Type,
+            _ => "handler",
+        };
     }
     // Scanned assemblies are named "scan_…"; anything else (framework, NuGet) is a library.
     private static bool FromLibrary(ISymbol member) => member.ContainingAssembly is { } a && !a.Name.StartsWith("scan_", StringComparison.Ordinal);
@@ -443,7 +494,19 @@ internal sealed class CSharpScanner : IRepositoryScanner
             if (!edges.TryGetValue(key, out var edge)) edges[key] = edge = new(kind, from, to);
             edge.Add(evidence);
         }
-        // The function / property / field whose code contains the site, if it is a node on the map.
+        // The function / property / field whose code contains the site, if it is a node on the map — or the UI handler
+        // lambda inside it (see Handlers), so a button's calls belong to that button.
+        var handlerCache = new Dictionary<SyntaxNode, Dictionary<SyntaxNode, string>>();
+        Dictionary<SyntaxNode, string> HandlersOf(SyntaxNode decl, string memberId)
+        {
+            if (!handlerCache.TryGetValue(decl, out var map))
+            {
+                handlerCache[decl] = map = [];
+                foreach (var (lambda, id, _) in Handlers(decl, memberId))
+                    if (c.Graph.Nodes.ContainsKey(id)) map[lambda] = id;
+            }
+            return map;
+        }
         string? SourceMember(SyntaxNode site)
         {
             var decl = site.AncestorsAndSelf().FirstOrDefault(n => n is BaseMethodDeclarationSyntax or PropertyDeclarationSyntax
@@ -451,7 +514,25 @@ internal sealed class CSharpScanner : IRepositoryScanner
                 || n is VariableDeclaratorSyntax { Parent.Parent: FieldDeclarationSyntax or EventFieldDeclarationSyntax });
             if (decl == null) return null;
             if (!sourceCache.TryGetValue(decl, out var id)) sourceCache[decl] = id = MemberNode(model.GetDeclaredSymbol(decl, ct), u.Module.Id);
+            if (id == null) return null;
+            var handlers = HandlersOf(decl, id);
+            if (handlers.Count > 0)
+                foreach (var ancestor in site.Ancestors().TakeWhile(a => a != decl))
+                    if (handlers.TryGetValue(ancestor, out var handler)) return handler;
             return id;
+        }
+        // Builder → each handler it wires (the innermost enclosing handler or the member itself).
+        void WireHandlers(SyntaxNode decl)
+        {
+            if (SourceMember(decl) is not { } memberId) return;
+            foreach (var (lambda, handler) in HandlersOf(decl, memberId))
+            {
+                var from = SourceMember(lambda) ?? memberId;
+                var key = (EdgeKinds.Reference, from, handler);
+                if (!edges.TryGetValue(key, out var edge)) edges[key] = edge = new(EdgeKinds.Reference, from, handler);
+                var snippet = Regex.Replace(lambda.Parent?.ToString() ?? lambda.ToString(), @"\s+", " ");
+                edge.Add(new SourceLocation(tree.FilePath, Line(lambda), snippet.Length > 90 ? snippet[..90] + "…" : snippet));
+            }
         }
         // The function / property / field the site points at ("x.Foo()", "x.Bar", "new T()").
         string? TargetMember(ISymbol? symbol, string module) => symbol switch
@@ -505,6 +586,7 @@ internal sealed class CSharpScanner : IRepositoryScanner
                 // A call through an interface or a base class reaches this member too: link the member to what it
                 // implements or overrides, so callers of the contract lead to the code that actually runs.
                 case BaseMethodDeclarationSyntax or PropertyDeclarationSyntax or IndexerDeclarationSyntax or EventDeclarationSyntax:
+                    WireHandlers(node);
                     if (model.GetDeclaredSymbol(node, ct) is { ContainingType: { } } declared)
                     {
                         foreach (var contract in Implemented(declared)) Link(node, contract, EdgeKinds.Implement);
