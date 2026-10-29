@@ -62,9 +62,10 @@ header{display:flex;flex-wrap:wrap;align-items:center;gap:10px 22px;padding-bloc
 <header>
   <div class="brand"><b>Map</b><span>473 файла · 9 функций · 5 ярусов</span></div>
   <nav class="tabs" role="tablist" aria-label="Вид">
+    <button role="tab" data-v="0">Схема связей</button>
     <button role="tab" data-v="1">Созвездие</button>
-    <button role="tab" data-v="2">Пузыри</button>
-    <button role="tab" data-v="3">Город кода</button>
+    <button role="tab" data-v="2">Плитки</button>
+    <button role="tab" data-v="3">Дерево</button>
     <button role="tab" data-v="4">Солнце</button>
     <button role="tab" data-v="5">Потоки</button>
     <span class="sep" aria-hidden="true"></span>
@@ -91,7 +92,7 @@ const fname=id=>FEATS.find(f=>f.id===id)?.name||id, tname=id=>TIERS.find(t=>t.id
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const plural=(n,a,b,c)=>{n=Math.abs(n)%100;const m=n%10;return n>10&&n<20?c:m===1?a:m>=2&&m<=4?b:c;};
 const files=D.files; const nF=f=>files.filter(x=>x.f===f).length;
-let sel=null, view='1';
+let sel=null, view='0';
 const tip=document.getElementById('tip');
 function showTip(e,html){tip.innerHTML=html;tip.style.opacity=1;const x=Math.min(e.clientX+14,innerWidth-340),y=Math.min(e.clientY+14,innerHeight-80);tip.style.left=x+'px';tip.style.top=y+'px';}
 function hideTip(){tip.style.opacity=0;}
@@ -105,14 +106,67 @@ function setInfo(title,text){info.innerHTML=`<h3>${title}</h3>${text}`;}
 const canvas=document.getElementById('canvas'), page=document.getElementById('page');
 const size=()=>({W:canvas.clientWidth,H:canvas.clientHeight});
 
+// 0 · scheme: architecture diagram — tier bands, a block per feature in each tier (same feature = same column),
+// arrows = calls between blocks (width ~ calls). Hover a block: its links light up; click: details on the right. Wheel zoom.
+let cellSel=null;
+function v0(){
+  const {W,H}=size();
+  const cols=FEATS.filter(f=>files.some(x=>x.f===f.id)); const bw=150, bh=62, cg=14, band=150, padL=166, padT=20;
+  const key=(t,f)=>t+'|'+f; const cells=[];
+  TIERS.forEach((t,r)=>cols.forEach((f,c)=>{ const n=files.filter(x=>x.t===t.id&&x.f===f.id).length; if(n) cells.push({k:key(t.id,f.id),t,f,n,x:padL+c*(bw+cg),y:padT+r*band+(band-bh)/2}); }));
+  const byK=new Map(cells.map(c=>[c.k,c]));
+  const fullW=padL+cols.length*(bw+cg), fullH=padT+TIERS.length*band+20;
+  const svg=d3.select(canvas).append('svg').attr('viewBox',`0 0 ${W} ${H}`); const z=svg.append('g');
+  const avail=W-276-330, k0=Math.min(1.3,avail/fullW,(H-30)/fullH);
+  const zoom=d3.zoom().scaleExtent([.4,4]).on('zoom',e=>z.attr('transform',e.transform)); svg.call(zoom).on('dblclick.zoom',null);
+  svg.call(zoom.transform,d3.zoomIdentity.translate(276+(avail-fullW*k0)/2,(H-fullH*k0)/2).scale(k0));
+  const defs=svg.append('defs');
+  defs.append('marker').attr('id','ah').attr('viewBox','0 0 10 10').attr('refX',8).attr('refY',5).attr('markerUnits','userSpaceOnUse').attr('markerWidth',11).attr('markerHeight',11).attr('orient','auto-start-reverse').append('path').attr('d','M0,0 L10,5 L0,10 z').attr('fill','context-stroke');
+  // bands
+  TIERS.forEach((t,r)=>{ z.append('rect').attr('x',0).attr('y',padT+r*band+4).attr('width',fullW).attr('height',band-8).attr('rx',14).attr('fill',TC[t.id]).attr('fill-opacity',.06).attr('stroke',TC[t.id]).attr('stroke-opacity',.25);
+    z.append('text').attr('x',16).attr('y',padT+r*band+band/2-4).attr('fill',TC[t.id]).attr('font-weight',700).attr('font-size',16).text(t.name);
+    z.append('text').attr('x',16).attr('y',padT+r*band+band/2+15).attr('fill','#9aa3b5').attr('font-size',11).text(t.sub); });
+  const links=D.cellLinks.map(([a,b,n])=>({a:byK.get(a),b:byK.get(b),n})).filter(l=>l.a&&l.b);
+  const maxN=d3.max(links,l=>l.n);
+  const focus=cellSel||null;
+  const shown=links.filter(l=>focus?(l.a.k===focus||l.b.k===focus):true).slice(0,focus?999:45);
+  const pathOf=l=>{ const a=l.a,b=l.b; const ax=a.x+bw/2, bx=b.x+bw/2;
+    if(a.y===b.y){ const y=a.y+bh, dy=34+Math.abs(ax-bx)*.12; return `M${ax},${y} C${ax},${y+dy} ${bx},${y+dy} ${bx},${y+2}`; }
+    const down=b.y>a.y; const ay=down?a.y+bh:a.y, by=down?b.y-2:b.y+bh+2; const m=(ay+by)/2; return `M${ax},${ay} C${ax},${m} ${bx},${m} ${bx},${by}`; };
+  const lg=z.append('g').attr('fill','none');
+  const lp=lg.selectAll('path').data(shown).join('path').attr('d',pathOf)
+    .attr('stroke',l=>focus?(l.a.k===focus?FC[l.b.f.id]:FC[l.a.f.id]):'#8a93a8').attr('stroke-opacity',focus?.85:.28)
+    .attr('stroke-width',l=>1+7*Math.sqrt(l.n/maxN)).attr('marker-end','url(#ah)')
+    .on('mousemove',(e,l)=>showTip(e,`<b>${tname(l.a.t.id)} · ${esc(fname(l.a.f.id))} → ${tname(l.b.t.id)} · ${esc(fname(l.b.f.id))}</b><span>${l.n} вызовов</span>`)).on('mouseleave',hideTip);
+  const bg=z.append('g');
+  const box=bg.selectAll('g').data(cells).join('g').attr('transform',c=>`translate(${c.x},${c.y})`).style('cursor','pointer')
+    .attr('opacity',c=>{ if(sel&&c.f.id!==sel) return .25; if(!focus) return 1; return c.k===focus||shown.some(l=>l.a===c||l.b===c)?1:.25; })
+    .on('click',(e,c)=>{ cellSel=cellSel===c.k?null:c.k; draw(); e.stopPropagation(); })
+    .on('mouseenter',(e,c)=>{ if(focus) return; lp.attr('stroke-opacity',l=>l.a===c||l.b===c?.9:.06).attr('stroke',l=>l.a===c?FC[l.b.f.id]:l.b===c?FC[l.a.f.id]:'#8a93a8'); })
+    .on('mouseleave',()=>{ if(focus) return; lp.attr('stroke-opacity',.28).attr('stroke','#8a93a8'); });
+  box.append('rect').attr('width',bw).attr('height',bh).attr('rx',11).attr('fill','#161c28').attr('stroke',c=>FC[c.f.id]).attr('stroke-width',c=>c.k===focus?3:1.5);
+  box.append('rect').attr('width',5).attr('height',bh-16).attr('x',8).attr('y',8).attr('rx',2).attr('fill',c=>FC[c.f.id]);
+  box.append('text').attr('x',20).attr('y',24).attr('fill','#eef1f7').attr('font-weight',600).attr('font-size',14).text(c=>c.f.name.length>16?c.f.name.slice(0,15)+'…':c.f.name);
+  box.append('text').attr('x',20).attr('y',43).attr('fill','#9aa3b5').attr('font-size',12).attr('font-family','JetBrains Mono').text(c=>`${c.n} ${plural(c.n,'файл','файла','файлов')}`);
+  svg.on('click',()=>{ if(cellSel){ cellSel=null; draw(); } });
+  if(!focus){ setInfo('Схема связей', `<h2>Вся программа и её связи</h2><p>Полосы — ярусы, блоки — функции на этом ярусе (одна функция — одна колонка). Стрелка — код одного блока вызывает код другого, толщина — сколько вызовов. Показаны 45 самых сильных. Наведите на блок — увидите его связи; нажмите — подробности. Колесо — приближение.</p>`); return; }
+  const c=byK.get(focus); const out=links.filter(l=>l.a===c).sort((x,y)=>y.n-x.n), inn=links.filter(l=>l.b===c).sort((x,y)=>y.n-x.n);
+  const li=(l,o)=>`<div style="display:flex;justify-content:space-between;gap:8px;padding:4px 0;border-top:1px solid #ffffff10;font-size:13px"><span><span style="color:${FC[o.f.id]}">●</span> ${tname(o.t.id)} · ${esc(fname(o.f.id))}</span><span style="font-family:var(--mono);color:var(--muted)">${l.n}</span></div>`;
+  setInfo('Блок', `<h2 style="color:${FC[c.f.id]}">${esc(fname(c.f.id))}</h2><p>${tname(c.t.id)} · ${c.n} ${plural(c.n,'файл','файла','файлов')}</p>
+    <p style="margin-top:10px;color:var(--fg)">Главные файлы</p><p style="font-family:var(--mono);font-size:12px">${(D.cellTop[c.k]||[]).map(esc).join('<br>')}</p>
+    <p style="margin-top:10px;color:var(--fg)">Вызывает →</p>${out.slice(0,6).map(l=>li(l,l.b)).join('')||'<p>—</p>'}
+    <p style="margin-top:10px;color:var(--fg)">← Его вызывают</p>${inn.slice(0,6).map(l=>li(l,l.a)).join('')||'<p>—</p>'}
+    <p style="margin-top:10px">Нажмите на пустое место, чтобы вернуться ко всей схеме.</p>`);
+}
+
 // 1 · constellation: hierarchical edge bundling (feature arcs around the circle, bundled call links)
 function v1(){
   const {W,H}=size(); const R=Math.min(W-560,H)/2-100; const cx=276+(W-276-320)/2, cy=H/2;
   const CF=FEATS.filter(f=>f.id!=='other'); const root=d3.hierarchy({children:CF.map(f=>({id:f.id,children:files.map((x,i)=>({...x,i})).filter(x=>x.f===f.id).sort((a,b)=>a.t.localeCompare(b.t))}))}).sum(()=>1);
   d3.cluster().size([2*Math.PI,R])(root);
   const leaves=root.leaves(); const byI=new Map(leaves.map(l=>[l.data.i,l]));
-  const svg=d3.select(canvas).append('svg').attr('viewBox',`0 0 ${W} ${H}`);
-  const g=svg.append('g').attr('transform',`translate(${cx},${cy})`);
+  const svg=d3.select(canvas).append('svg').attr('viewBox',`0 0 ${W} ${H}`); const zr=svg.append('g'); svg.call(d3.zoom().scaleExtent([.6,6]).on('zoom',e=>zr.attr('transform',e.transform)));
+  const g=zr.append('g').attr('transform',`translate(${cx},${cy})`);
   const line=d3.lineRadial().curve(d3.curveBundle.beta(.85)).radius(d=>d.y).angle(d=>d.x);
   const maxN=d3.max(D.flinks,l=>l[2]);
   const links=D.flinks.map(([a,b,n])=>({s:byI.get(a),t:byI.get(b),n})).filter(l=>l.s&&l.t).slice(0,260);
@@ -132,59 +186,69 @@ function v1(){
       .attr('fill',!sel||sel===c.data.id?'#eef1f7':'#5f687a').attr('font-size',13).attr('font-weight',600).text(fname(c.data.id)); });
   const mine=links.filter(l=>sel&&on(l));
   setInfo('Созвездие', sel?`<h2 style="color:${FC[sel]}">${esc(fname(sel))}</h2><p>${mine.length} сильных связей с другими функциями. Точки — файлы (цвет — ярус), нити — вызовы кода между функциями, связанные в пучки.</p>`
-    :`<h2>Кто с кем связан</h2><p>По кругу — файлы девяти функций (общий код не показан). Нити — вызовы между разными функциями; чем ярче пучок, тем теснее связь. Наведите на точку или нажмите на функцию.</p>`);
+    :`<h2>Кто с кем связан</h2><p>По кругу — файлы девяти функций (общий код не показан). Нити — вызовы между разными функциями; чем ярче пучок, тем теснее связь. Наведите на точку или нажмите на функцию. Колесо мыши — приближение.</p>`);
 }
 
-// 2 · bubbles: zoomable circle packing tier > feature > file
+// 2 · tiles: zoomable treemap tier > feature > file; click a tile to open it, breadcrumbs to go back
+let tileFocus=[];
 function v2(){
-  const {W,H}=size(); const S=Math.min(W-600,H-40); const ox=276+(W-276-320-S)/2, oy=(H-S)/2;
-  const data={name:'Map',children:TIERS.map(t=>({name:t.name,tier:t.id,children:FEATS.map(f=>({name:f.name,f:f.id,tier:t.id,children:files.filter(x=>x.t===t.id&&x.f===f.id).map(x=>({...x,value:x.m+2}))})).filter(f=>f.children.length)}))};
-  const root=d3.pack().size([S,S]).padding(d=>d.depth===0?14:d.depth===1?8:2)(d3.hierarchy(data).sum(d=>d.value||0).sort((a,b)=>b.value-a.value));
-  const svg=d3.select(canvas).append('svg').attr('viewBox',`0 0 ${W} ${H}`); const g=svg.append('g');
-  let focus=root, vw=[root.x,root.y,root.r*2];
-  const node=g.selectAll('circle').data(root.descendants().slice(1)).join('circle')
-    .attr('fill',d=>d.depth===1?TC[d.data.tier]+'14':d.depth===2?FC[d.data.f]+'2a':FC[d.data.f])
-    .attr('stroke',d=>d.depth===1?TC[d.data.tier]:d.depth===2?FC[d.data.f]+'88':'none').attr('stroke-width',d=>d.depth===1?1.5:1)
-    .attr('opacity',d=>!sel||d.depth===1||d.data.f===sel?1:.18).style('cursor',d=>d.children?'pointer':'default')
-    .on('click',(e,d)=>{ if(d.children&&focus!==d){ zoom(d); e.stopPropagation(); } })
-    .on('mousemove',(e,d)=>showTip(e,d.depth===3?fileTip(d.data):`<b>${esc(d.data.name)}</b><span>${d.leaves().length} файлов${d.depth===2?' · '+tname(d.data.tier):''}</span>`)).on('mouseleave',hideTip);
-  const label=g.selectAll('text').data(root.descendants().slice(1).filter(d=>d.depth<=2)).join('text').attr('text-anchor','middle').attr('pointer-events','none')
-    .attr('font-weight',d=>d.depth===1?700:500).attr('fill','#eef1f7');
-  svg.on('click',()=>zoom(root));
-  function zoomTo(v){ const k=S/v[2]; vw=v;
-    node.attr('transform',d=>`translate(${ox+(d.x-v[0])*k+S/2},${oy+(d.y-v[1])*k+S/2})`).attr('r',d=>d.r*k);
-    label.attr('transform',d=>`translate(${ox+(d.x-v[0])*k+S/2},${oy+(d.y-v[1])*k+S/2-(d.depth===1?d.r*k-18:0)})`)
-      .attr('font-size',d=>d.depth===1?15:12).text(d=>d.data.name)
-      .attr('opacity',d=>{ const r=d.r*k; const fits=d.depth===1? r>60 : (d.parent===focus||d.parent===focus.parent&&focus.depth===2) && r>d.data.name.length*3.6+6; return fits?1:0; }); }
-  function zoom(d){ focus=d; const t=svg.transition().duration(650); t.tween('zoom',()=>{const i=d3.interpolateZoom(vw,[d.x,d.y,d.r*2]);return t=>zoomTo(i(t));}); }
-  zoomTo([root.x,root.y,root.r*2]);
-  setInfo('Пузыри', `<h2>Из чего состоит программа</h2><p>Большие круги — ярусы, внутри — функции, точки — файлы (размер — сколько в файле функций). Нажмите на круг, чтобы приблизить; на фон — чтобы отдалить.</p>`);
+  const {W,H}=size(); const x0=276, y0=58, w=W-276-336, h=H-80;
+  const data={name:'Map',children:TIERS.map(t=>({name:t.name,tier:t.id,children:FEATS.map(f=>({name:f.name,f:f.id,tier:t.id,children:files.filter(x=>x.t===t.id&&x.f===f.id).map(x=>({...x,name:x.n,value:Math.max(30,x.loc)}))})).filter(f=>f.children.length)}))};
+  const root=d3.hierarchy(data).sum(d=>d.value||0).sort((a,b)=>b.value-a.value);
+  let node=root; for(const name of tileFocus){ const c=(node.children||[]).find(c=>c.data.name===name); if(!c) break; node=c; }
+  const sub=d3.hierarchy(node.data).sum(d=>d.value||0).sort((a,b)=>b.value-a.value);
+  d3.treemap().size([w,h]).paddingOuter(6).paddingTop(d=>d.depth===0?0:26).paddingInner(4).round(true)(sub);
+  const svg=d3.select(canvas).append('svg').attr('viewBox',`0 0 ${W} ${H}`);
+  const crumbs=['Map',...tileFocus];
+  const bc=svg.append('g').attr('transform',`translate(${x0},${y0-24})`); let cx=0;
+  crumbs.forEach((c,i)=>{ const last=i===crumbs.length-1; const t=bc.append('text').attr('x',cx).attr('y',0).attr('fill',last?'#eef1f7':'#8fb0ff').attr('font-size',14).attr('font-weight',last?600:500).style('cursor',last?'default':'pointer').text(c);
+    if(!last) t.on('click',()=>{ tileFocus=tileFocus.slice(0,i); draw(); });
+    cx+=t.node().getComputedTextLength()+8; if(!last){ bc.append('text').attr('x',cx).attr('fill','#5f687a').attr('font-size',14).text('›'); cx+=16; } });
+  const g=svg.append('g').attr('transform',`translate(${x0},${y0})`);
+  const colorOf=d=>d.data.f?FC[d.data.f]:d.data.tier?TC[d.data.tier]:'#59627a';
+  const nodes=sub.descendants().filter(d=>d.depth>0&&d.depth<=2);
+  const cell=g.selectAll('g').data(nodes).join('g').attr('transform',d=>`translate(${d.x0},${d.y0})`);
+  cell.append('rect').attr('width',d=>Math.max(0,d.x1-d.x0)).attr('height',d=>Math.max(0,d.y1-d.y0)).attr('rx',d=>d.depth===1?10:6)
+    .attr('fill',d=>d.depth===1?colorOf(d)+'1f':colorOf(d)+(d.children?'33':'cc')).attr('stroke',d=>colorOf(d)+(d.depth===1?'aa':'66'))
+    .attr('opacity',d=>!sel||!d.data.f&&!(d.data.children||[]).length||d.data.f===sel||d.depth===1&&!d.data.f?1:.22)
+    .style('cursor',d=>d.children?'zoom-in':'default')
+    .on('click',(e,d)=>{ if(!d.children) return; const path=d.ancestors().reverse().slice(1).map(a=>a.data.name); tileFocus=[...tileFocus,...path]; draw(); })
+    .on('mousemove',(e,d)=>showTip(e,d.data.p?fileTip(d.data):`<b>${esc(d.data.name)}</b><span>${d.leaves().length} ${plural(d.leaves().length,'файл','файла','файлов')} · нажмите, чтобы открыть</span>`)).on('mouseleave',hideTip);
+  cell.each(function(d){ const ww=d.x1-d.x0, hh=d.y1-d.y0; const s=d3.select(this); const big=d.children||d.depth===1;
+    const label=d.data.name, sub2=d.data.p?`${d.data.m} функций`:`${d.leaves().length} ${plural(d.leaves().length,'файл','файла','файлов')}`;
+    const fs=d.depth===1?15:13; if(ww<label.length*fs*.55+16||hh<(big?24:34)) return;
+    const nm=s.append('text').attr('x',10).attr('y',big?18:20).attr('fill','#eef1f7').attr('font-weight',600).attr('font-size',fs).attr('pointer-events','none').text(label);
+    const nw=nm.node().getComputedTextLength(); if(nw>ww-16){ nm.remove(); return; }
+    const ct=s.append('text').attr('x',ww-10).attr('y',big?18:20).attr('text-anchor','end').attr('fill','#c9d0de').attr('opacity',.75).attr('font-size',12).attr('font-family','JetBrains Mono').attr('pointer-events','none').text(sub2);
+    if(nw+ct.node().getComputedTextLength()+28>ww){ ct.attr('x',10).attr('y',(big?18:20)+17).attr('text-anchor','start'); if(hh<(big?44:52)||ct.node().getComputedTextLength()>ww-16) ct.remove(); } });
+  setInfo('Плитки', `<h2>${esc(crumbs[crumbs.length-1])}</h2><p>Площадь плитки — объём кода. ${node===root?'Большие рамки — ярусы, внутри — функции.':node.depth===1?'Внутри — функции этого яруса и их файлы.':'Внутри — файлы.'} Нажмите на плитку, чтобы открыть её; путь сверху — шаг назад.</p>`);
 }
 
-// 3 · code city: isometric blocks; districts = tiers, building = file (footprint ~ code size, height ~ functions)
+// 3 · tree: collapsible tree Map > tier > feature > file, wheel to zoom, drag to pan
+const openTree=new Set(['Map','ui','app','domain','data','infra']);
 function v3(){
-  const {W,H}=size(); const cv=document.createElement('canvas'); const dpr=devicePixelRatio||1; cv.width=W*dpr; cv.height=H*dpr; canvas.appendChild(cv);
-  const ctx=cv.getContext('2d'); ctx.scale(dpr,dpr);
-  const cell=Math.max(4,Math.min(9,(W-640)/150)); const iso=(x,y,z)=>[(x-y)*0.866, (x+y)*0.5 - z];
-  const blds=[]; let ox=0; const districts=[];
-  TIERS.forEach(t=>{ const fs=files.filter(f=>f.t===t.id).sort((a,b)=>FEATS.findIndex(x=>x.id===a.f)-FEATS.findIndex(x=>x.id===b.f)||b.loc-a.loc);
-    const cols=Math.ceil(Math.sqrt(fs.length)); fs.forEach((f,i)=>{ const gx=ox+(i%cols)*cell*1.6, gy=Math.floor(i/cols)*cell*1.6; const s=cell*(.5+.9*Math.min(1,Math.sqrt(f.loc/400))); blds.push({f,x:gx,y:gy,s,h:6+Math.sqrt(f.m)*cell*1.15}); });
-    districts.push({t,x:ox,w:cols*cell*1.6,d:Math.ceil(fs.length/cols)*cell*1.6}); ox+=cols*cell*1.6+cell*5; });
-  const span=iso(ox,0,0)[0]-iso(0,districts.reduce((a,d)=>Math.max(a,d.d),0),0)[0];
-  const offX=276+(W-276-320-span)/2+iso(0,districts.reduce((a,d)=>Math.max(a,d.d),0),0)[0]*-1, offY=H*0.42;
-  const P=(x,y,z)=>{const p=iso(x,y,z);return [p[0]+offX,p[1]+offY];};
-  districts.forEach(d=>{ ctx.beginPath(); [[d.x-cell,-cell],[d.x+d.w,-cell],[d.x+d.w,d.d],[d.x-cell,d.d]].forEach(([x,y],i)=>{const p=P(x,y,0); i?ctx.lineTo(...p):ctx.moveTo(...p);}); ctx.closePath(); ctx.fillStyle=TC[d.t.id]+'1c'; ctx.fill(); ctx.strokeStyle=TC[d.t.id]+'66'; ctx.stroke();
-    const lp=P(d.x+d.w/2,d.d+cell*3,0); ctx.fillStyle=TC[d.t.id]; ctx.font='600 14px Golos Text, sans-serif'; ctx.textAlign='center'; ctx.fillText(d.t.name,lp[0],lp[1]); });
-  blds.sort((a,b)=>(a.x+a.y)-(b.x+b.y));
-  const shade=(hex,k)=>{const c=d3.color(hex);return (k>0?c.brighter(k):c.darker(-k)).formatHex();};
-  blds.forEach(b=>{ const c=FC[b.f.f]; const dim=sel&&b.f.f!==sel; ctx.globalAlpha=dim?.16:1;
-    const {x,y,s,h}=b; const top=[P(x,y,h),P(x+s,y,h),P(x+s,y+s,h),P(x,y+s,h)]; const left=[P(x,y+s,0),P(x+s,y+s,0),P(x+s,y+s,h),P(x,y+s,h)]; const right=[P(x+s,y,0),P(x+s,y+s,0),P(x+s,y+s,h),P(x+s,y,h)];
-    [[left,shade(c,-1.1)],[right,shade(c,-.5)],[top,shade(c,.25)]].forEach(([pts,col])=>{ctx.beginPath();pts.forEach((p,i)=>i?ctx.lineTo(...p):ctx.moveTo(...p));ctx.closePath();ctx.fillStyle=col;ctx.fill();});
-    b.top=top; }); ctx.globalAlpha=1;
-  const inside=(pt,poly)=>{let c=false;for(let i=0,j=poly.length-1;i<poly.length;j=i++){const [xi,yi]=poly[i],[xj,yj]=poly[j];if(((yi>pt[1])!==(yj>pt[1]))&&(pt[0]<(xj-xi)*(pt[1]-yi)/(yj-yi)+xi))c=!c;}return c;};
-  cv.onmousemove=e=>{const r=cv.getBoundingClientRect(); const pt=[e.clientX-r.left,e.clientY-r.top]; for(let i=blds.length-1;i>=0;i--){ const b=blds[i]; const box=[b.top[0],b.top[1],P(b.x+b.s,b.y+b.s,0),P(b.x,b.y+b.s,0)]; if(inside(pt,b.top)||inside(pt,[b.top[1],b.top[2],P(b.x+b.s,b.y+b.s,0),P(b.x+b.s,b.y,0)])||inside(pt,[b.top[3],b.top[2],P(b.x+b.s,b.y+b.s,0),P(b.x,b.y+b.s,0)])){showTip(e,fileTip(b.f));return;} } hideTip();};
-  cv.onmouseleave=hideTip;
-  setInfo('Город кода', `<h2>Программа как город</h2><p>Кварталы — ярусы. Дом — файл: площадь — объём кода, высота — сколько в нём функций, цвет — к какой функции относится. Высокие дома — самые нагруженные места. Наведите на дом.</p>`);
+  const {W,H}=size();
+  const data={name:'Map',key:'Map',children:TIERS.map(t=>({name:t.name,key:t.id,tier:t.id,children:FEATS.map(f=>({name:f.name,key:t.id+'/'+f.id,f:f.id,tier:t.id,children:files.filter(x=>x.t===t.id&&x.f===f.id).sort((a,b)=>b.m-a.m).map(x=>({...x,name:x.n,key:x.p}))})).filter(f=>f.children.length)}))};
+  const root=d3.hierarchy(data); root.each(d=>{ d.total=d.leaves().length; if(d.children&&!openTree.has(d.data.key)){ d._c=d.children; d.children=null; } });
+  const dx=34, dy=330; d3.tree().nodeSize([dx,dy])(root);
+  const svg=d3.select(canvas).append('svg').attr('viewBox',`0 0 ${W} ${H}`); const z=svg.append('g'); const g=z.append('g');
+  let minX=Infinity,maxX=-Infinity; root.each(d=>{minX=Math.min(minX,d.x);maxX=Math.max(maxX,d.x);});
+  const startY=(H-(maxX-minX))/2-minX;
+  const zoom=d3.zoom().scaleExtent([.25,4]).on('zoom',e=>z.attr('transform',e.transform)); svg.call(zoom).on('dblclick.zoom',null);
+  const k=1.05; svg.call(zoom.transform,d3.zoomIdentity.translate(330,H/2).scale(k));
+  const col=d=>d.data.p?FC[d.data.f]:d.data.f?FC[d.data.f]:d.data.tier?TC[d.data.tier]:'#eef1f7';
+  g.append('g').attr('fill','none').selectAll('path').data(root.links()).join('path')
+    .attr('d',d3.linkHorizontal().x(d=>d.y).y(d=>d.x)).attr('stroke',d=>col(d.target)).attr('stroke-opacity',d=>!sel||d.target.data.f===sel||!d.target.data.f?.45:.08).attr('stroke-width',1.5);
+  const n=g.append('g').selectAll('g').data(root.descendants()).join('g').attr('transform',d=>`translate(${d.y},${d.x})`)
+    .style('cursor',d=>(d.children||d._c)?'pointer':'default').attr('opacity',d=>!sel||!d.data.f||d.data.f===sel?1:.25)
+    .on('click',(e,d)=>{ if(!(d.children||d._c)) return; const k=d.data.key; openTree.has(k)?openTree.delete(k):openTree.add(k); draw(); })
+    .on('mousemove',(e,d)=>d.data.p&&showTip(e,fileTip(d.data))).on('mouseleave',hideTip);
+  n.append('circle').attr('r',d=>d.depth===0?9:d.data.p?3.5+Math.sqrt(d.data.m)/3:7).attr('fill',d=>d._c?col(d):'#0d1017').attr('stroke',col).attr('stroke-width',2);
+  n.append('text').attr('x',d=>d.data.p?10:14).attr('dy','.35em').attr('fill','#eef1f7').attr('font-size',d=>d.data.p?12:14).attr('font-weight',d=>d.data.p?400:600)
+    .attr('paint-order','stroke').attr('stroke','#0d1017').attr('stroke-width',4).text(d=>d.data.name);
+  n.filter(d=>!d.data.p&&d.depth>0).append('text').attr('x',14).attr('dy','1.6em').attr('fill','#9aa3b5').attr('font-size',11).attr('font-family','JetBrains Mono')
+    .text(d=>`${d.total} ${plural(d.total,'файл','файла','файлов')}${d._c?' · раскрыть':''}`);
+  setInfo('Дерево', `<h2>Устройство по веткам</h2><p>Map → ярусы → функции → файлы. Нажмите на кружок, чтобы раскрыть или свернуть ветку. Колесо мыши — приближение, перетаскивание — сдвиг по дереву. Закрашенный кружок — внутри есть ещё.</p>`);
 }
 
 // 4 · sun: zoomable sunburst tier > feature > file
@@ -216,12 +280,12 @@ function v4(){
 // 5 · flows: ribbons tier -> feature, width = files
 function v5(){
   const {W,H}=size(); const x0=276+60, x1=W-320-60-150, top=60, h=H-120, gap=14;
-  const svg=d3.select(canvas).append('svg').attr('viewBox',`0 0 ${W} ${H}`);
+  const svg0=d3.select(canvas).append('svg').attr('viewBox',`0 0 ${W} ${H}`); const svg=svg0.append('g'); svg0.call(d3.zoom().scaleExtent([.6,6]).on('zoom',e=>svg.attr('transform',e.transform)));
   const flows=[]; TIERS.forEach(t=>FEATS.forEach(f=>{const n=files.filter(x=>x.t===t.id&&x.f===f.id).length; if(n) flows.push({t:t.id,f:f.id,n});}));
   const total=files.length, k=(h-gap*(FEATS.length-1))/total;
   const L={}, Rn={}; let y=top; TIERS.forEach(t=>{const n=files.filter(x=>x.t===t.id).length; L[t.id]={y,h:n*k,off:0,n}; y+=n*k+gap*(FEATS.length-1)/(TIERS.length-1);});
   y=top; FEATS.forEach(f=>{const n=nF(f.id); Rn[f.id]={y,h:n*k,off:0,n}; y+=n*k+gap;});
-  const defs=svg.append('defs');
+  const defs=svg0.append('defs');
   flows.sort((a,b)=>TIERS.findIndex(t=>t.id===a.t)-TIERS.findIndex(t=>t.id===b.t)||FEATS.findIndex(f=>f.id===a.f)-FEATS.findIndex(f=>f.id===b.f));
   flows.forEach((fl,i)=>{ const a=L[fl.t], b=Rn[fl.f]; const w=fl.n*k; const ya=a.y+a.off, yb=b.y+b.off; a.off+=w; b.off+=w;
     const gid='gr'+i; const gr=defs.append('linearGradient').attr('id',gid).attr('x1','0%').attr('x2','100%'); gr.append('stop').attr('offset','0%').attr('stop-color',TC[fl.t]); gr.append('stop').attr('offset','100%').attr('stop-color',FC[fl.f]);
@@ -234,7 +298,7 @@ function v5(){
     svg.append('text').attr('x',x0-10).attr('y',a.y+a.h/2+17).attr('text-anchor','end').attr('fill','#9aa3b5').attr('font-size',12).text(a.n+' '+plural(a.n,'файл','файла','файлов')); });
   FEATS.forEach(f=>{ const b=Rn[f.id]; svg.append('rect').attr('x',x1).attr('y',b.y).attr('width',10).attr('height',Math.max(2,b.h)).attr('rx',3).attr('fill',FC[f.id]);
     svg.append('text').attr('x',x1+18).attr('y',b.y+b.h/2).attr('dy','.35em').attr('fill',!sel||sel===f.id?'#eef1f7':'#5f687a').attr('font-weight',500).attr('font-size',13).style('cursor','pointer').text(`${fname(f.id)} · ${b.n}`).on('click',()=>{sel=sel===f.id?null:f.id;draw();}); });
-  setInfo('Потоки', `<h2>Как ярусы питают функции</h2><p>Слева — ярусы, справа — функции. Лента показывает, сколько файлов яруса работает на функцию; её толщина — количество. Видно, какие функции держатся на интерфейсе, а какие — на ядре или движке.</p>`);
+  setInfo('Потоки', `<h2>Как ярусы питают функции</h2><p>Слева — ярусы, справа — функции. Лента показывает, сколько файлов яруса работает на функцию; её толщина — количество. Видно, какие функции держатся на интерфейсе, а какие — на ядре или движке. Колесо мыши — приближение.</p>`);
 }
 
 // 6 · time (weeks)
@@ -263,9 +327,9 @@ function v7(){
 }
 const tabs=[...document.querySelectorAll('[role=tab]')];
 tabs.forEach(t=>t.onclick=()=>{view=t.dataset.v;try{localStorage.setItem('pmv3',view)}catch(e){}draw();});
-try{view=localStorage.getItem('pmv3')||'1'}catch(e){}
+try{view=localStorage.getItem('pmv3')||'0'}catch(e){}
 function draw(){ tabs.forEach(t=>t.setAttribute('aria-selected',t.dataset.v===view)); [...chips.children].forEach(b=>b.setAttribute('aria-pressed',b.dataset.id===sel));
-  canvas.innerHTML=''; page.hidden=true; hideTip(); ({1:v1,2:v2,3:v3,4:v4,5:v5,6:v6,7:v7})[view](); }
+  canvas.innerHTML=''; page.hidden=true; hideTip(); ({0:v0,1:v1,2:v2,3:v3,4:v4,5:v5,6:v6,7:v7})[view](); }
 let rt; addEventListener('resize',()=>{clearTimeout(rt);rt=setTimeout(draw,150);});
 (document.fonts?document.fonts.ready:Promise.resolve()).then(draw);
 </script>
