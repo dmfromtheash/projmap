@@ -9,7 +9,9 @@ import { CDP } from './cdp.mjs';
 import { install, state, discover, point } from './page.mjs';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
-const scratch = String.raw`C:\Users\Leshe\AppData\Local\Temp\claude\C--Projects-Map\2a840339-9a92-4e96-9cb6-e8811e371f66\scratchpad`;
+const scratch = process.env.PROJMAP_SCRATCH || path.join(process.env.TEMP || '.', 'projmap-e2e');
+// the window under test keeps all its state (cache, recent list, WebView profile) here, never in the owner's store
+const home = path.join(scratch, 'e2e-home');
 const argv = process.argv.slice(2), opt = {};
 for (let i=0;i<argv.length;i++) {
   if(argv[i]==='--help') { console.log('node tools/e2e/run.mjs --exe <projmap.exe> --root <repo> [--port 9333] [--out <dir>] [--runs 2] [--budget-seconds 600]'); process.exit(0); }
@@ -25,7 +27,7 @@ opt.out=path.resolve(opt.out||path.join(dir,'results',new Date().toISOString().r
 const relative=path.relative(opt.root,opt.out);
 if(relative===''||(!relative.startsWith('..')&&!path.isAbsolute(relative)))throw new Error('Output must be outside the scanned repository');
 if(/src[\\/]ProjMap.App[\\/]bin/i.test(opt.exe))throw new Error('Publish a separate executable; src/ProjMap.App/bin is forbidden');
-await access(opt.exe); await access(opt.root); await mkdir(opt.out,{recursive:true});
+await access(opt.exe); await access(opt.root); await mkdir(opt.out,{recursive:true}); await mkdir(home,{recursive:true});
 const sleep=ms=>new Promise(r=>setTimeout(r,ms)), now=()=>performance.now(), exec=promisify(execFile);
 const ps=(args,timeout=20000)=>exec('powershell.exe',['-NoLogo','-NoProfile','-ExecutionPolicy','Bypass',...args],{windowsHide:true,timeout,maxBuffer:4*1024*1024});
 const exists=async p=>{try{await access(p);return true}catch{return false}};
@@ -54,14 +56,13 @@ async function preflight() {
   report.preflight=p;
   const single=opt['allow-single-display']&&p.screens.length===1;
   if(!single&&!p.screens.some(s=>!s.primary))throw new Error('SAFETY ABORT: no non-primary display; host would fall back to primary (use --allow-single-display only when the laptop panel is the only display)');
-  if(p.existing.length)throw new Error(`SAFETY ABORT: projmap already running (${p.existing}); close it to isolate shared AppStore state`);
   try { const r=await fetch(`http://127.0.0.1:${opt.port}/json`,{signal:AbortSignal.timeout(1000)}); if(r.ok)throw new Error('PORT_IN_USE'); }
   catch(e){if(e.message==='PORT_IN_USE')throw new Error('CDP port already in use');}
 }
 
 async function start(run) {
   const actionLog=path.join(opt.out,`${run.cache}-actions.log`);
-  const child=spawn(opt.exe,[opt.root,'--test','--cdp-port',String(opt.port),'--action-log',actionLog],{cwd:path.dirname(opt.exe),windowsHide:true,stdio:'ignore'});
+  const child=spawn(opt.exe,[opt.root,'--test','--cdp-port',String(opt.port),'--action-log',actionLog],{cwd:path.dirname(opt.exe),windowsHide:true,stdio:'ignore',env:{...process.env,PROJMAP_HOME:home}});
   const s={child,actionLog,run,cdp:null,monitor:null,safe:false,closed:false,monitorAt:now(),heartbeat:null,freeze:null,probes:[],lastShell:null};
   session=s; run.launchAt=new Date().toISOString(); run.pid=child.pid;
   (run.launches??=[]).push({pid:child.pid,at:run.launchAt,recovery:recovering});
@@ -364,7 +365,7 @@ try {
     if(await exists(file))report.build[name]=createHash('sha256').update(await readFile(file)).digest('hex');
   }
   await preflight();
-  const appStore=path.join(process.env.LOCALAPPDATA,'projmap');
+  const appStore=home;
   const hash=createHash('sha256').update(opt.root.toLowerCase()).digest('hex').slice(0,16).toUpperCase();
   for(const p of [path.join(appStore,'cache',hash+'.json'),path.join(appStore,'webview-test'),path.join(appStore,'recent.json')])await preserve(p);
   // The hashes above identify the published payload, independent of parallel source edits.

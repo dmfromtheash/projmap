@@ -5,6 +5,36 @@
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+// Text from project documents (Markdown) as readable prose: paragraphs, lists, small headings, bold and code.
+// Lines wrapped in the source are joined; a blank line, a list item or a heading starts a new block.
+function mdLite(text) {
+  const inline = s => esc(s)
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*|__([^_]+)__/g, (_, a, b) => `<b>${a || b}</b>`);
+  const out = [];
+  let para = [], list = null;
+  // a text shorter than about two lines is not stretched: justification would only open wide gaps in it
+  const p = s => `<p${s.length < 110 ? ' class="short"' : ''}>${inline(s)}</p>`;
+  const flushPara = () => { if (para.length) out.push(p(para.join(' '))); para = []; };
+  const flushList = () => { if (list) out.push(`<${list.tag}>${list.items.map(i => `<li>${inline(i)}</li>`).join('')}</${list.tag}>`); list = null; };
+  for (const raw of String(text ?? '').replace(/\r/g, '').split('\n')) {
+    const line = raw.trim();
+    const h = line.match(/^#{1,6}\s+(.*)$/), li = line.match(/^(?:[-*+]|(\d+)[.)])\s+(.*)$/);
+    if (!line) { flushPara(); flushList(); }
+    else if (h) { flushPara(); flushList(); out.push(`<h4>${inline(h[1])}</h4>`); }
+    else if (li) {
+      flushPara();
+      const tag = li[1] ? 'ol' : 'ul';
+      if (list && list.tag !== tag) flushList();
+      (list ??= { tag, items: [] }).items.push(li[2]);
+    }
+    else if (list && /^\s{2,}/.test(raw)) list.items[list.items.length - 1] += ' ' + line; // continuation of an item
+    else { flushList(); para.push(line); }
+  }
+  flushPara(); flushList();
+  return out.join('');
+}
 const fmt = n => n >= 10000 ? (n / 1000).toFixed(0) + 'k' : n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n ?? 0);
 const plural = (n, one, few, many) => {
   const m10 = n % 10, m100 = n % 100;
@@ -119,8 +149,8 @@ setTheme(systemDark.matches ? 'dark' : 'light');
 function buildStyle() {
   const dark = document.documentElement.dataset.theme === 'dark';
   const T = dark
-    ? { text: '#eef1f6', soft: '#b9c1ce', test: '#a4adbb', sel: '#ffffff', tbg: '#20252f', tfg: '#ffffff', found: '#7cb1ff', catBg: '#ffffff', catOp: 0.03, catLine: '#4a5466' }
-    : { text: '#1f2430', soft: '#4a5262', test: '#7a8190', sel: '#1f2430', tbg: '#ffffff', tfg: '#1f2430', found: '#2f6fdb', catBg: '#000000', catOp: 0.025, catLine: '#c9c2b2' };
+    ? { text: '#eef1f6', soft: '#b9c1ce', test: '#a4adbb', sel: '#ffffff', tbg: '#20252f', tfg: '#ffffff', found: '#7cb1ff', catBg: '#ffffff', catOp: 0.03, catLine: '#4a5466', canvas: '#20252d' }
+    : { text: '#1f2430', soft: '#4a5262', test: '#7a8190', sel: '#1f2430', tbg: '#ffffff', tfg: '#1f2430', found: '#2f6fdb', catBg: '#000000', catOp: 0.025, catLine: '#c9c2b2', canvas: '#fbfaf6' };
   return [
     { selector: 'node', style: {
       'shape': 'round-rectangle', 'width': 'data(w)', 'height': 'data(h)',
@@ -166,6 +196,9 @@ function buildStyle() {
       'segment-weights': 'data(sw)', 'segment-distances': 'data(sd)', 'segment-radius': 10, 'radius-type': 'arc-radius',
       'source-endpoint': 'data(sp)', 'target-endpoint': 'data(tp)', 'target-distance-from-node': 0,
     } },
+    // drawn by the arrow layer (edgelayer.js) unless highlighted
+    { selector: 'edge.onlayer', style: { 'display': 'none' } },
+    { selector: 'edge.onlayer.hl, edge.onlayer.hover', style: { 'display': 'element' } },
     { selector: 'edge:active, edge.hover', style: { 'width': 4, 'opacity': 1, 'z-index': 30, 'label': 'data(lbl)', 'font-size': 12, 'font-weight': 600, 'color': T.tfg, 'text-background-color': T.tbg, 'text-background-opacity': 0.92, 'text-background-padding': 3 } },
     { selector: 'edge.tree', style: { 'target-arrow-shape': 'none', 'width': 2, 'opacity': 0.55 } },
     { selector: 'edge.overlay', style: { 'display': 'none' } },
@@ -183,6 +216,13 @@ function buildStyle() {
       'text-background-color': T.tbg, 'text-background-opacity': 0.92, 'text-background-padding': 3,
       'text-background-shape': 'round-rectangle',
     } },
+    // selection veil (see dimAllBut): the canvas colour over everything, the kept blocks above it
+    { selector: 'node.veil', style: {
+      'shape': 'rectangle', 'background-color': T.canvas, 'background-opacity': 0.78, 'border-width': 0, 'label': '',
+      'background-image': 'none', 'events': 'no', 'z-index': 22,
+    } },
+    { selector: 'node.lift', style: { 'z-index': 26 } },
+    { selector: 'edge.lift', style: { 'z-index': 23 } },
     { selector: 'node:selected', style: { 'border-width': 4, 'border-color': T.sel } },
     { selector: '.changed', style: { 'underlay-color': '#f0b429', 'underlay-opacity': 0.45, 'underlay-padding': 7 } },
     { selector: '.planhl', style: { 'underlay-color': '#f0b429', 'underlay-opacity': 0.4, 'underlay-padding': 9 } },
@@ -193,8 +233,10 @@ function buildStyle() {
 const cy = cytoscape({
   container: $('#cy'),
   wheelSensitivity: 0.25,
-  // big diagrams: pan/zoom move a cached picture instead of redrawing hundreds of cards each frame
-  textureOnViewport: true, hideEdgesOnViewport: false, motionBlur: false, pixelRatio: 1,
+  // Full screen resolution (pixelRatio 1 on a 125 % screen made every diagram blurry). While the view
+  // moves, a snapshot of the full-resolution picture is moved instead of redrawing 1600 arrows per frame:
+  // panning shifts it pixel for pixel; zooming scales it only until the gesture ends.
+  textureOnViewport: true, hideEdgesOnViewport: false, motionBlur: false, pixelRatio: 'auto',
   minZoom: 0.05, maxZoom: 3,
   boxSelectionEnabled: false,
   autoungrabify: true, // blocks are placed by the layout; dragging one would detach it from its frame
@@ -372,10 +414,10 @@ function buildElements() {
     const [w, h] = card ? [card.w, card.h] : open ? [10, 10] : nodeSize(n);
     const changed = n.path && [...S.changed].some(([cp, t]) => now - t < 20000 && cp.startsWith(n.path.toLowerCase()));
     els.push({
-      group: 'nodes',
+      group: 'nodes', pannable: true, // blocks are not draggable: dragging one moves the picture
       data: {
         id, name: (open && n._desc?.ru ? `${n._desc.ru}  ·  ${n.name}` : n.name), kind: n.kind,
-        label: card || open ? '' : nodeLabel(n, closed), svg: card?.svg, w, h, tw: w - 14,
+        label: card || open ? '' : nodeLabel(n, closed), svg: card?.svg, w, h, tw: Math.max(20, w - 14),
         fill: col.fill, line: col.line, soft: col.soft, closedKids: closed, test: M.isTest(id),
         frame: open, z: open ? 1 + Math.min(8, depthOf(id)) : 20,
       },
@@ -411,7 +453,7 @@ function buildElements() {
   for (const [key, list] of frames) {
     const [, title, about] = CATEGORIES.find(c => c[0] === key);
     const fid = 'cat:' + key;
-    els.push({ group: 'nodes', data: { id: fid, kind: 'cat', frame: true, z: 1, name: `${title}\n${about}`, label: '', w: 10, h: 10, tw: 520, fill: 'transparent', line: 'transparent', soft: 'transparent' } });
+    els.push({ group: 'nodes', pannable: true, data: { id: fid, kind: 'cat', frame: true, z: 1, name: `${title}\n${about}`, label: '', w: 10, h: 10, tw: 520, fill: 'transparent', line: 'transparent', soft: 'transparent' } });
     for (const el of list) el.data.inCat = fid;
   }
 
@@ -465,35 +507,43 @@ function blocksUnder(id) {
 
 // ---------------------------------------------------------------- render
 
-function render({ animate = true, fit = false, anchor = null } = {}) {
+// The new picture is laid out first and swapped in as one batch: adding the elements and then moving and
+// re-routing all of them after the layout restyled every element twice (hundreds of ms on big levels).
+// The old picture stays on screen while ELK works.
+function render({ fit = false, anchor = null } = {}) {
   if (!S.model) return;
-  const before = new Map(cy.nodes().map(n => [n.id(), { ...n.position() }]));
-  const els = buildElements();
-
-  cy.batch(() => {
-    cy.elements().remove();
-    cy.add(els);
-    if (S.focus && cy.getElementById(S.focus).nonempty()) {
-      const M = S.model, core = blocksUnder(S.focus), keep = new Set();
-      core.forEach(x => keep.add(x.id()));
-      core.connectedEdges().forEach(e => { keep.add(e.id()); keep.add(e.source().id()); keep.add(e.target().id()); });
-      for (const id of [...keep]) if (M.byId.has(id)) for (const a of M.ancestors(id)) if (cy.getElementById(a).nonempty()) keep.add(a);
-      cy.elements().filter(x => !keep.has(x.id())).remove();
+  const fresh = cy.elements().empty();
+  let els = buildElements();
+  if (S.focus && els.some(e => e.data.id === S.focus)) els = focusElements(els, S.focus);
+  // the plan has no arrows to route: a simple packing is instant and fills the screen better
+  const job = S.view === 'plan'
+    ? packedLayout(els, fit || fresh)
+    : layeredLayout(els, { fit: fit || fresh });
+  job.then(ok => {
+    if (!ok) return;
+    if (fit || fresh) cy.fit(diagramNodes(), 40);
+    else if (anchor && cy.getElementById(anchor).nonempty()) {
+      // after opening/closing a block, show that block together with its neighbours
+      const inner = blocksUnder(anchor);
+      smoothView({ fit: { eles: inner.union(inner.neighborhood().nodes()), padding: 60 } });
     }
-    // new blocks start where their parent was, so opening a block "unfolds" from it
-    cy.nodes().forEach(n => {
-      const old = before.get(n.id());
-      if (old) n.position(old);
-      else {
-        const anc = S.model.byId.has(n.id()) ? S.model.ancestors(n.id()).find(a => before.has(a)) : null;
-        if (anc) n.position({ ...before.get(anc) });
-      }
-    });
+    applySelection();
   });
-
-  runLayout(animate && before.size > 0, fit || !before.size, anchor);
   updateCrumbs();
   renderLegend();
+}
+
+// «Фокус»: only the block, what is inside it, its arrows and the blocks at their other ends (with frames).
+function focusElements(els, focus) {
+  const M = S.model, keep = new Set();
+  const under = id => M.byId.has(id) && M.isUnder(id, focus);
+  for (const e of els) if (e.group === 'nodes' && under(e.data.id)) keep.add(e.data.id);
+  for (const e of els) if (e.group === 'edges' && (keep.has(e.data.source) || keep.has(e.data.target))) {
+    keep.add(e.data.id); keep.add(e.data.source); keep.add(e.data.target);
+  }
+  const present = new Set(els.map(e => e.data.id));
+  for (const id of [...keep]) if (M.byId.has(id)) for (const a of M.ancestors(id)) if (present.has(a)) keep.add(a);
+  return els.filter(e => keep.has(e.data.id));
 }
 
 // ELK runs in a Web Worker: a big layout (hundreds of blocks) must never freeze the window.
@@ -510,62 +560,93 @@ function setBusy(on, text) {
 }
 let layoutSeq = 0;
 
-function runLayout(animate, fit, anchor) {
-  // the plan has no arrows to route: a simple packing is instant and fills the screen better
-  const job = S.view === 'plan' ? Promise.resolve((++layoutSeq, packLayout(), true)) : layeredLayout();
-  job.then(ok => {
-    if (!ok) return;
-    if (fit) cy.fit(cy.nodes(), 40);
-    else if (anchor && cy.getElementById(anchor).nonempty()) {
-      // after opening/closing a block, show that block together with its neighbours
-      const inner = blocksUnder(anchor);
-      smoothView({ fit: { eles: inner.union(inner.neighborhood().nodes()), padding: 60 } });
-    }
-    applySelection();
-  });
+// Puts a laid-out picture on screen a few hundred elements per frame — frames, then blocks, then arrows.
+// The first draw of an element is what costs (Cytoscape styles and rasterizes it): 1100 blocks at once froze
+// the window for 300–500 ms, in parts every frame stays short. Returns false if a newer layout took over.
+// The part size adapts to the measured frame time (target ≈ 30 ms per frame).
+async function swapIn(els, seq, fit) {
+  const order = [
+    ...els.filter(e => e.group === 'nodes' && e.data.frame), ...els.filter(e => e.group === 'nodes' && !e.data.frame),
+    ...els.filter(e => e.group === 'edges'),
+  ];
+  const frame = () => new Promise(r => requestAnimationFrame(() => setTimeout(r, 0))); // after the frame is drawn
+  let size = 120, i = 0;
+  while (i < order.length) {
+    const part = order.slice(i, i + size), t0 = performance.now();
+    cy.batch(() => {
+      if (i === 0) { cy.elements().remove(); if (fit) fitBox(els); }
+      cy.add(part);
+    });
+    i += part.length;
+    if (i >= order.length) break;
+    await frame();
+    if (seq !== layoutSeq) return false;
+    const ms = Math.max(1, performance.now() - t0);
+    size = Math.max(40, Math.min(800, Math.round(size * 30 / ms)));
+  }
+  return true;
+}
+// the view that cy.fit(…, 40) would give for elements that are not on the diagram yet
+function fitBox(els, pad = 40) {
+  let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+  for (const e of els) if (e.group === 'nodes' && e.position) {
+    const w = (e.data.w || 0) / 2, h = (e.data.h || 0) / 2;
+    x1 = Math.min(x1, e.position.x - w); x2 = Math.max(x2, e.position.x + w);
+    y1 = Math.min(y1, e.position.y - h); y2 = Math.max(y2, e.position.y + h);
+  }
+  if (!Number.isFinite(x1)) return;
+  const z = Math.max(cy.minZoom(), Math.min(cy.maxZoom(), Math.min((cy.width() - 2 * pad) / Math.max(1, x2 - x1), (cy.height() - 2 * pad) / Math.max(1, y2 - y1))));
+  cy.viewport({ zoom: z, pan: { x: cy.width() / 2 - z * (x1 + x2) / 2, y: cy.height() / 2 - z * (y1 + y2) / 2 } });
+}
+
+async function packedLayout(els, fit) {
+  const seq = ++layoutSeq;
+  if (elkBusy) restartElk(); // an outdated ELK layout must not land on top of this one
+  elkBusy = true;
+  packLayout(els);
+  const done = await swapIn(els, seq, fit);
+  if (seq !== layoutSeq || !done) return false;
+  EdgeLayer.clear();
+  elkBusy = false; setBusy(false);
+  return true;
 }
 
 // ELK places the blocks AND routes every arrow orthogonally around them, with separate lanes for
 // parallel arrows. Open blocks become frames whose size ELK computes; the routes are drawn exactly.
-async function layeredLayout() {
+// Works on the element list (not on the diagram), then puts the finished picture on screen in one batch.
+async function layeredLayout(els, { fit = false } = {}) {
   const seq = ++layoutSeq;
   const M = S.model;
-  const frames = cy.nodes('[kind="cat"]');
-  const loose = cy.nodes('[kind="cat"], [inCat]');
-  const looseIds = new Set(loose.map(n => n.id()));
-  const nodes = cy.nodes().filter(n => !looseIds.has(n.id()));
-  const inLayout = new Set(nodes.map(n => n.id()));
-  const routed = cy.edges().filter(e => !e.hasClass('cochange') && !e.hasClass('implied') && !e.hasClass('overlay') && inLayout.has(e.source().id()) && inLayout.has(e.target().id()));
+  const byId = new Map(els.map(e => [e.data.id, e]));
+  const isCls = (e, c) => (' ' + (e.classes || '') + ' ').includes(' ' + c + ' ');
+  // blocks without arrows sit in category frames placed beside the graph (placeFrames), not by ELK
+  const loose = id => { const d = byId.get(id).data; return d.kind === 'cat' || (d.inCat && byId.has(d.inCat)); };
+  const nodes = els.filter(e => e.group === 'nodes' && !loose(e.data.id));
+  const inLayout = new Set(nodes.map(e => e.data.id));
+  const routed = els.filter(e => e.group === 'edges' && !isCls(e, 'cochange') && !isCls(e, 'implied') && !isCls(e, 'overlay')
+    && inLayout.has(e.data.source) && inLayout.has(e.data.target));
   const view = S.view || 'map';
-  const packed = false; // the plan is packed by packLayout() instead (views.js)
+  const aspect = (cy.width() / Math.max(1, cy.height())).toFixed(2);
 
   // hierarchy for ELK: data.pid in the extra views, otherwise the project tree
   // (nearest ancestor that is on the diagram)
   const kidsOf = new Map(), roots = [];
-  nodes.forEach(n => {
+  for (const e of nodes) {
+    const id = e.data.id;
     let p;
-    if (n.data('pid') !== undefined) p = n.data('pid');
-    else { p = M.byId.has(n.id()) ? M.parent(n.id()) : null; while (p && !inLayout.has(p)) p = M.parent(p); }
-    if (p && inLayout.has(p)) { if (!kidsOf.has(p)) kidsOf.set(p, []); kidsOf.get(p).push(n.id()); } else roots.push(n.id());
-  });
+    if (e.data.pid !== undefined) p = e.data.pid;
+    else { p = M.byId.has(id) ? M.parent(id) : null; while (p && !inLayout.has(p)) p = M.parent(p); }
+    if (p && inLayout.has(p)) { if (!kidsOf.has(p)) kidsOf.set(p, []); kidsOf.get(p).push(id); } else roots.push(id);
+  }
   const toElk = id => {
     const kids = kidsOf.get(id);
-    if (kids?.length) return {
-      id, children: kids.map(toElk),
-      layoutOptions: packed
-        ? { 'elk.algorithm': 'rectpacking', 'elk.padding': '[top=70,left=30,bottom=30,right=30]', 'elk.spacing.nodeNode': 24, 'elk.aspectRatio': 2.2 }
-        : { 'elk.padding': '[top=64,left=36,bottom=36,right=36]' },
-    };
-    const n = cy.getElementById(id);
-    return { id, width: n.data('w') + 6, height: n.data('h') + 6 };
+    if (kids?.length) return { id, children: kids.map(toElk), layoutOptions: { 'elk.padding': '[top=64,left=36,bottom=36,right=36]' } };
+    const d = byId.get(id).data;
+    return { id, width: d.w + 6, height: d.h + 6 };
   };
-  const base = packed
-    ? { 'elk.algorithm': 'rectpacking', 'elk.hierarchyHandling': 'SEPARATE_CHILDREN', 'elk.spacing.nodeNode': 60,
-        'elk.aspectRatio': (cy.width() / Math.max(1, cy.height())).toFixed(2) }
-    : null;
   const graph = {
     id: '__root',
-    layoutOptions: base || {
+    layoutOptions: {
       'elk.algorithm': 'layered', 'elk.direction': view === 'tree' ? 'RIGHT' : 'DOWN',
       'elk.hierarchyHandling': 'INCLUDE_CHILDREN', 'elk.edgeRouting': 'ORTHOGONAL',
       'elk.layered.spacing.nodeNodeBetweenLayers': view === 'tree' ? 90 : 120, 'elk.spacing.nodeNode': view === 'tree' ? 26 : 80,
@@ -575,10 +656,10 @@ async function layeredLayout() {
       'elk.layered.nodePlacement.strategy': 'BRANDES_KOEPF', 'elk.layered.nodePlacement.bk.fixedAlignment': 'BALANCED',
       'elk.layered.crossingMinimization.strategy': 'LAYER_SWEEP',
       'elk.layered.mergeEdges': false, 'elk.layered.unnecessaryBendpoints': false,
-      'elk.separateConnectedComponents': true, 'elk.aspectRatio': (cy.width() / Math.max(1, cy.height())).toFixed(2),
+      'elk.separateConnectedComponents': true, 'elk.aspectRatio': aspect,
     },
     children: roots.map(toElk),
-    edges: packed ? [] : routed.map(e => ({ id: e.id(), sources: [e.source().id()], targets: [e.target().id()] })),
+    edges: routed.map(e => ({ id: e.data.id, sources: [e.data.source], targets: [e.data.target] })),
   };
   let res;
   if (elkBusy) restartElk();
@@ -591,7 +672,6 @@ async function layeredLayout() {
     console.error('elk', err); toast('Не удалось разложить схему: ' + (err.message || err), 5000); return false;
   }
   if (seq !== layoutSeq) return false; // a newer layout started meanwhile
-  elkBusy = false; setBusy(false);
 
   // elkjs 0.9 ignores elk.json.*Coords: child shapes are relative to their parent and edge
   // sections to their "container" node, so convert everything to absolute coordinates here.
@@ -605,56 +685,84 @@ async function layeredLayout() {
   const shift = (p, o) => ({ x: p.x + o.x, y: p.y + o.y });
   const centre = id => { const b = boxes.get(id); return { x: b.x + b.width / 2, y: b.y + b.height / 2 }; };
 
-  cy.batch(() => {
-    for (const [id, b] of boxes) {
-      if (id === '__root') continue;
-      const n = cy.getElementById(id);
-      if (n.empty()) continue;
-      if (n.data('frame')) n.data({ w: b.width, h: b.height, tw: b.width - 40 });
-      n.position(centre(id));
-    }
-    placeFrames(frames, nodes);
+  for (const [id, b] of boxes) {
+    const e = byId.get(id);
+    if (!e) continue;
+    if (e.data.frame) Object.assign(e.data, { w: b.width, h: b.height, tw: Math.max(20, b.width - 40) });
+    e.position = centre(id);
+  }
+  placeFrames(els, byId, boxes);
 
-    // segments are expressed relative to the line between the two endpoints
-    cy.edges('.routed').removeClass('routed');
-    for (const re of res.edges || []) {
-      const sec = re.sections?.[0];
-      const e = cy.getElementById(re.id);
-      if (!sec || e.empty() || !boxes.has(e.source().id()) || !boxes.has(e.target().id())) continue;
-      const sc = centre(e.source().id()), tc = centre(e.target().id());
-      const o = boxes.get(re.container || '__root') || boxes.get('__root');
-      const S0 = shift(sec.startPoint, o), T0 = shift(sec.endPoint, o), bends = (sec.bendPoints || []).map(p => shift(p, o));
-      const dx = T0.x - S0.x, dy = T0.y - S0.y, len2 = dx * dx + dy * dy || 1, len = Math.sqrt(len2);
-      const w = [], d = [];
-      for (const p of bends) {
-        const px = p.x - S0.x, py = p.y - S0.y;
-        w.push(((px * dx + py * dy) / len2).toFixed(4));
-        d.push(((dx * py - dy * px) / len).toFixed(2));
-      }
-      e.data({
-        sp: `${(S0.x - sc.x).toFixed(1)}px ${(S0.y - sc.y).toFixed(1)}px`,
-        tp: `${(T0.x - tc.x).toFixed(1)}px ${(T0.y - tc.y).toFixed(1)}px`,
-        sw: w.length ? w.join(' ') : '0.5', sd: d.length ? d.join(' ') : '0',
-      });
-      e.scratch('_route', [S0, ...bends, T0]);
-      e.addClass('routed');
+  // segments are expressed relative to the line between the two endpoints
+  // elkjs puts an edge into the `edges` of the lowest node containing both ends, not only into the root:
+  // reading res.edges alone left every arrow inside an open block unrouted (drawn as a plain curve)
+  const allEdges = [], collect = n => { for (const e of n.edges || []) allEdges.push(e); for (const c of n.children || []) collect(c); };
+  collect(res);
+  const layerRoutes = [];
+  for (const re of allEdges) {
+    const sec = re.sections?.[0], e = byId.get(re.id);
+    if (!sec || !e || !boxes.has(e.data.source) || !boxes.has(e.data.target)) continue;
+    const sc = centre(e.data.source), tc = centre(e.data.target);
+    const o = boxes.get(re.container || '__root') || boxes.get('__root');
+    const S0 = shift(sec.startPoint, o), T0 = shift(sec.endPoint, o), bends = (sec.bendPoints || []).map(p => shift(p, o));
+    const dx = T0.x - S0.x, dy = T0.y - S0.y, len2 = dx * dx + dy * dy || 1, len = Math.sqrt(len2);
+    const w = [], d = [];
+    for (const p of bends) {
+      const px = p.x - S0.x, py = p.y - S0.y;
+      w.push(((px * dx + py * dy) / len2).toFixed(4));
+      d.push(((dx * py - dy * px) / len).toFixed(2));
     }
-  });
+    Object.assign(e.data, {
+      sp: `${(S0.x - sc.x).toFixed(1)}px ${(S0.y - sc.y).toFixed(1)}px`,
+      tp: `${(T0.x - tc.x).toFixed(1)}px ${(T0.y - tc.y).toFixed(1)}px`,
+      sw: w.length ? w.join(' ') : '0.5', sd: d.length ? d.join(' ') : '0',
+    });
+    e.classes = (e.classes || '') + ' routed onlayer';
+    layerRoutes.push(layerRoute(e, [S0, ...bends, T0]));
+  }
+  // stays "busy" until the last part is on screen, so nobody centres on a half-built picture
+  const done = await swapIn(els, seq, fit);
+  if (seq !== layoutSeq || !done) return false;
+  EdgeLayer.set(layerRoutes);
+  elkBusy = false; setBusy(false);
   return true;
+}
+
+// An arrow for the arrow layer, styled like the Cytoscape edge it replaces (see the edge rules in buildStyle).
+function layerRoute(e, pts) {
+  const cls = ' ' + e.classes + ' ', has = c => cls.includes(' ' + c + ' ');
+  let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+  for (const p of pts) { x1 = Math.min(x1, p.x); x2 = Math.max(x2, p.x); y1 = Math.min(y1, p.y); y2 = Math.max(y2, p.y); }
+  const tree = has('tree');
+  return {
+    id: e.data.id, pts, x1, y1, x2, y2, color: e.data.color,
+    width: tree ? 2 : e.data.width ?? 2.4, op: tree ? 0.55 : e.data.op ?? 0.85,
+    dash: has('cochange') ? [8, 6] : has('db') ? [1.5, 4] : null,
+    arrow: tree || has('cochange') ? 'none' : has('db') ? 'square' : 'triangle',
+  };
 }
 
 // Category frames (blocks without arrows) stack beside a tall graph or under a wide one;
 // inside a frame the blocks form a grid of up to three columns; the frame is sized around them.
-function placeFrames(frames, main) {
-  if (frames.empty()) return;
-  const bb = main.nonempty() ? main.boundingBox() : { x1: 0, x2: 0, y1: 0, y2: 0, w: 0, h: 0 };
+function placeFrames(els, byId, boxes) {
+  const frames = els.filter(e => e.group === 'nodes' && e.data.kind === 'cat');
+  if (!frames.length) return;
+  let bb = null;
+  for (const [id, b] of boxes) if (id !== '__root' && byId.has(id)) {
+    bb = bb || { x1: Infinity, y1: Infinity, x2: -Infinity, y2: -Infinity };
+    bb.x1 = Math.min(bb.x1, b.x); bb.y1 = Math.min(bb.y1, b.y); bb.x2 = Math.max(bb.x2, b.x + b.width); bb.y2 = Math.max(bb.y2, b.y + b.height);
+  }
+  const empty = !bb;
+  bb = bb ? { ...bb, w: bb.x2 - bb.x1, h: bb.y2 - bb.y1 } : { x1: 0, x2: 0, y1: 0, y2: 0, w: 0, h: 0 };
   const order = CATEGORIES.map(c => 'cat:' + c[0]);
   const LABEL = 90, GAP = 150, PAD = 30;
-  const specs = frames.sort((a, b) => order.indexOf(a.id()) - order.indexOf(b.id())).map(f => {
-    const kids = cy.nodes(`[inCat="${f.id()}"]`).sort((a, b) => (a.data('name') || '').localeCompare(b.data('name') || ''));
+  const kidsOf = new Map(frames.map(f => [f.data.id, []]));
+  for (const e of els) if (e.group === 'nodes' && kidsOf.has(e.data.inCat)) kidsOf.get(e.data.inCat).push(e);
+  const specs = frames.sort((a, b) => order.indexOf(a.data.id) - order.indexOf(b.data.id)).map(f => {
+    const kids = kidsOf.get(f.data.id).sort((a, b) => (a.data.name || '').localeCompare(b.data.name || ''));
     const cols = Math.min(3, kids.length);
-    const colW = Math.max(...kids.map(k => k.data('w'))) + 36;
-    const rowH = Math.max(...kids.map(k => k.data('h'))) + 36;
+    const colW = Math.max(...kids.map(k => k.data.w)) + 36;
+    const rowH = Math.max(...kids.map(k => k.data.h)) + 36;
     return { f, kids, cols, colW, rowH, w: Math.max(cols * colW, 560), h: Math.ceil(kids.length / cols) * rowH + LABEL };
   });
   // beside the graph (a column of frames) or under it (a row) — whichever gives the bigger zoom
@@ -663,13 +771,13 @@ function placeFrames(frames, main) {
   const sideH = Math.max(bb.h, specs.reduce((t, s) => t + s.h + GAP, -GAP));
   const downW = Math.max(bb.w, specs.reduce((t, s) => t + s.w + GAP, -GAP));
   const downH = bb.h + GAP + Math.max(...specs.map(s => s.h));
-  const side = main.empty() || zoomFor(sideW, sideH) >= zoomFor(downW, downH);
-  let fx = side ? bb.x2 + GAP : bb.x1, fy = side ? bb.y1 : bb.y2 + GAP;
+  const side = empty || zoomFor(sideW, sideH) >= zoomFor(downW, downH);
+  let fx = side ? (empty ? 0 : bb.x2 + GAP) : bb.x1, fy = side ? bb.y1 : bb.y2 + GAP;
   for (const s of specs) {
     const x0 = fx + (s.w - s.cols * s.colW) / 2, y0 = fy + LABEL;
-    s.kids.forEach((k, i) => k.position({ x: x0 + (i % s.cols) * s.colW + s.colW / 2, y: y0 + Math.floor(i / s.cols) * s.rowH + s.rowH / 2 }));
-    s.f.data({ w: s.w + 2 * PAD, h: s.h + PAD, tw: s.w });
-    s.f.position({ x: fx + s.w / 2, y: fy + (s.h + PAD) / 2 - PAD / 2 });
+    s.kids.forEach((k, i) => { k.position = { x: x0 + (i % s.cols) * s.colW + s.colW / 2, y: y0 + Math.floor(i / s.cols) * s.rowH + s.rowH / 2 }; });
+    Object.assign(s.f.data, { w: s.w + 2 * PAD, h: s.h + PAD, tw: s.w });
+    s.f.position = { x: fx + s.w / 2, y: fy + (s.h + PAD) / 2 - PAD / 2 };
     if (side) fy += s.h + GAP; else fx += s.w + GAP;
   }
 }
@@ -677,24 +785,34 @@ function placeFrames(frames, main) {
 cy.on('mouseover', 'edge', e => e.target.addClass('hover'));
 cy.on('mouseout', 'edge', e => e.target.removeClass('hover'));
 
-// Performance notes (measured on 600+ blocks): Cytoscape's coll.not(otherColl) is quadratic and a class
-// change on an open frame re-styles all its descendants. So: plain id Sets, touch only elements whose
-// classes really change, and never dim frames (they only get their caption faded by children).
+// Everything on the diagram except the selection veil.
+const diagramNodes = () => cy.nodes('[kind != "veil"]');
+
+// Dimming everything but the selection: one translucent «veil» node over the whole diagram, and the kept
+// elements lifted above it. Toggling a class on 2000 elements made Cytoscape restyle and re-rasterize all of
+// them (≈250 ms on «Классы Ядра»); now only the kept few change. Frames stay under the veil as faint context.
 function dimAllBut(keepIds) {
   cy.batch(() => {
-    cy.elements().forEach(e => {
-      if (e.isNode() && e.data('frame')) return; // frames stay as context
-      const dim = !keepIds.has(e.id());
-      if (dim !== e.hasClass('dim')) e.toggleClass('dim', dim);
-    });
+    for (const id of keepIds) {
+      const e = cy.getElementById(id);
+      if (e.nonempty() && e.isNode() && !e.data('frame')) e.addClass('lift');
+    }
+    const bb = diagramNodes().boundingBox(), m = 4000;
+    const veil = { w: bb.w + 2 * m, h: bb.h + 2 * m };
+    const v = cy.getElementById('__veil');
+    if (v.empty()) cy.add({ group: 'nodes', data: { id: '__veil', kind: 'veil', ...veil, z: 22, tw: 20, label: '', fill: 'transparent', line: 'transparent', soft: 'transparent' }, position: { x: bb.x1 + bb.w / 2, y: bb.y1 + bb.h / 2 }, classes: 'veil' });
+    else { v.data(veil); v.position({ x: bb.x1 + bb.w / 2, y: bb.y1 + bb.h / 2 }); }
   });
+  EdgeLayer.setKeep(keepIds);
 }
 
 function applySelection() {
   cy.batch(() => {
-    cy.elements('.dim, .hl, .planhl, .shown').removeClass('dim hl planhl shown');
+    cy.elements('.hl, .planhl, .shown, .lift').removeClass('hl planhl shown lift');
     cy.nodes(':selected').unselect();
+    cy.getElementById('__veil').remove();
   });
+  EdgeLayer.setKeep(null);
   cy.edges('.dep').remove();
   const sel = S.selected;
   if (!sel) return;
@@ -704,6 +822,11 @@ function applySelection() {
     const n = cy.getElementById(sel);
     if (n.empty()) return;
     if (S.view === 'tree') { const deps = treeDependencyEdges(sel); if (deps.length) cy.add(deps); }
+    if (S.view === 'file' && FV.extraEdges?.length) {
+      // the weaker arrows of a big file: only the selected function's ones, while it is selected
+      const mine = FV.extraEdges.filter(e => e.data.source === sel || e.data.target === sel);
+      if (mine.length) cy.add(mine.map(e => ({ ...e, data: { ...e.data }, classes: e.classes + ' overlay dep' })));
+    }
     n.select();
     const edges = n.connectedEdges();
     const keepIds = new Set([sel]);
@@ -728,17 +851,26 @@ function applySelection() {
   if (!r) return;
   const n = cy.getElementById(r);
   n.select();
-  const inner = blocksUnder(r);
-  const edges = inner.connectedEdges();
-  const keepIds = new Set();
-  inner.forEach(x => keepIds.add(x.id()));
+  const inner = blocksUnder(r), innerIds = new Set(inner.map(x => x.id()));
+  // the block's links are the arrows that leave or enter it; arrows between its own parts stay as they are
+  const edges = inner.connectedEdges(), outside = edges.filter(e => innerIds.has(e.source().id()) !== innerIds.has(e.target().id()));
+  const keepIds = new Set(innerIds);
   edges.forEach(e => { keepIds.add(e.id()); keepIds.add(e.source().id()); keepIds.add(e.target().id()); });
-  dimAllBut(keepIds);
+  // when the selection is most of the picture (an open module that fills the screen) there is nothing to fade
+  if (keepIds.size < 0.6 * cy.elements().length) {
+    dimAllBut(keepIds);
+    cy.batch(() => edges.filter(e => !outside.has(e)).addClass('lift'));
+  }
+  // At most the strongest MAX_HL links get the highlight with its «×N» label: an open module selected on a big
+  // level has hundreds of incoming arrows (782 for «Ядро»), and labelled arrows are drawn one by one by
+  // Cytoscape (a 2-second zoom frame). Unreadable anyway; the full list is in the «Связи» tab.
+  const strongest = outside.length > MAX_HL ? outside.sort((a, b) => (b.data('w') || 0) - (a.data('w') || 0)).slice(0, MAX_HL) : outside;
   cy.batch(() => {
-    edges.addClass('hl');
-    edges.filter('.implied').addClass('shown'); // the selected block shows all its direct links
+    strongest.addClass('hl');
+    strongest.filter('.implied').addClass('shown'); // the selected block shows its direct links
   });
 }
+const MAX_HL = 120;
 
 // ---------------------------------------------------------------- actions
 
@@ -903,7 +1035,7 @@ function updateCrumbs() {
 $('#crumbs').addEventListener('click', e => {
   const s = e.target.closest('span'); if (!s) return;
   if (s.dataset.unfocus) { setFocus(S.focus); return; }
-  if (!s.dataset.id) { select(null); smoothView({ fit: { eles: cy.nodes(), padding: 40 } }); return; }
+  if (!s.dataset.id) { select(null); smoothView({ fit: { eles: diagramNodes(), padding: 40 } }); return; }
   reveal(s.dataset.id);
 });
 
@@ -1168,8 +1300,10 @@ function renderDetails() {
     <h2>${esc(titleOf(n))}</h2>
     ${n._desc?.ru && n._desc.ru !== n.name ? `<div class="orig">${esc(n.name)}</div>` : ''}
     ${n.path ? `<div class="path" data-path="${esc(n.path)}" data-line="${n.line || 0}" title="Открыть в редакторе">${esc(n.path)}${n.line ? ':' + n.line : ''}</div>` : ''}
-    <div class="what"><b>Что это.</b> ${esc(n._desc?.hint ? n._desc.hint[0].toUpperCase() + n._desc.hint.slice(1) + '.' : codeNote ? '' : 'Описание не найдено — смотрите связи и содержимое.')}
-      ${codeNote ? `<span class="src">${n.kind === 'module' || n.kind === 'folder' ? 'Из документации проекта' : 'Из комментария в коде'}: ${esc(codeNote)}</span>` : ''}</div>
+    <div class="what prose">
+      <h4>Что это</h4>
+      ${mdLite(n._desc?.hint ? n._desc.hint[0].toUpperCase() + n._desc.hint.slice(1) + '.' : codeNote ? 'Своего описания нет — ниже то, что сказано о нём в проекте.' : 'Описание не найдено — смотрите связи и содержимое.')}
+      ${codeNote ? `<h4>${n.kind === 'module' || n.kind === 'folder' ? 'Из документации проекта' : 'Из комментария в коде'}</h4>${mdLite(codeNote)}` : ''}</div>
     <div class="actions">
       ${M.hasKids(id) ? `<button data-act="toggle" class="main">${S.expanded.has(id) ? 'Свернуть на схеме' : 'Раскрыть на схеме'}</button>` : ''}
       <button data-act="focus">${S.focus === id ? 'Показать всё' : 'Показать только его связи'}</button>
@@ -1253,7 +1387,7 @@ function renderRoadmapDetails(r) {
       ${chain.length ? `<div class="muted" style="margin-top:8px;font-size:12.5px">${chain.map(esc).join(' › ')}</div>` : ''}
       <h2 style="${r.title.length > 90 ? 'font-size:15px;line-height:1.45' : ''}">${esc(r.title)}</h2>
       ${r.source ? `<div class="path" data-path="${esc(r.source.path)}" data-line="${r.source.line}">${esc(r.source.path)}:${r.source.line}</div>` : ''}
-      ${r.detail ? `<div class="what" style="white-space:pre-wrap;max-height:220px;overflow:auto">${esc(r.detail)}</div>` : ''}
+      ${r.detail ? `<div class="what prose scroll"><h4>Описание задачи</h4>${mdLite(r.detail)}</div>` : ''}
     </div>
     <div class="card grp" style="--gc:var(--warn)"><h3>Затрагивает в коде<span class="c">${links.length}</span></h3>
       <div class="gd">найдено по упоминаниям в тексте и по коммитам с номером задачи; на схеме подсвечено жёлтым</div>
@@ -1360,11 +1494,20 @@ $('#details').addEventListener('dblclick', e => { const c = e.target.closest('.c
 const selectable = id => !!(S.model?.node(id) || S.model?.rmById.has(id));
 const nameOf = id => S.model.node(id) ? titleOf(S.model.node(id)) : S.model.rmById.get(id)?.title || cy.getElementById(id).data('name') || id;
 
+// a click on an arrow of the arrow layer (over the background or an open frame) selects where it starts
+function tapLayerArrow() {
+  const id = EdgeLayer.hovered();
+  if (!id) return false;
+  const s = cy.getElementById(id).data('source');
+  if (s && selectable(s)) select(s);
+  return true;
+}
 cy.on('tap', 'node', e => {
+  if (e.target.data('frame') && tapLayerArrow()) return;
   const id = e.target.data('ref') || e.target.id(); // «Файл»: outside blocks point to a project block
   if (selectable(id)) select(id);
 });
-cy.on('tap', e => { if (e.target === cy) { select(null); hideCtx(); } });
+cy.on('tap', e => { if (e.target === cy) { if (!tapLayerArrow()) select(null); hideCtx(); } });
 cy.on('dbltap', 'node', e => {
   const id = e.target.id(), M = S.model;
   if (S.view === 'file') { const ref = e.target.data('ref'); if (ref) openFileView(ref, M.node(ref)?.kind === 'file' ? null : ref); return; }
@@ -1499,14 +1642,14 @@ $('#depthSeg').addEventListener('click', e => { const b = e.target.closest('butt
 let resizeTimer;
 window.addEventListener('resize', () => {
   clearTimeout(resizeTimer);
-  resizeTimer = setTimeout(() => { cy.resize(); if (!S.selected) cy.fit(cy.nodes(), 40); }, 200);
+  resizeTimer = setTimeout(() => { cy.resize(); if (!S.selected) cy.fit(diagramNodes(), 40); }, 200);
 });
 systemDark.addEventListener('change', () => {
   setTheme(systemDark.matches ? 'dark' : 'light');
   cy.style(buildStyle());
   if (S.model) { render({ animate: false }); renderTree(); renderDetails(); renderHot(); }
 });
-$('#btnFit').onclick =() => smoothView({ fit: { eles: cy.nodes(), padding: 40 } });
+$('#btnFit').onclick =() => smoothView({ fit: { eles: diagramNodes(), padding: 40 } });
 $('#btnRescan').onclick = () => { send({ type: 'rescan' }); showProgress('Сканирование…', 0.02); };
 $('#btnLive').onclick = () => { S.live = !S.live; send({ type: 'setLive', on: S.live }); syncToolbar(); toast(S.live ? 'Живое обновление включено' : 'Живое обновление выключено'); };
 $('#btnOpen').onclick = () => $('#start').classList.remove('hidden');
@@ -1521,7 +1664,7 @@ document.addEventListener('keydown', e => {
   if ((e.ctrlKey && e.key.toLowerCase() === 'k') || (!typing && e.key === '/')) { e.preventDefault(); $('#search').focus(); $('#search').select(); return; }
   if (typing) return;
   if (e.key === 'Escape') { if (S.focus) setFocus(S.focus); else select(null); hideCtx(); }
-  if (e.key === 'f' || e.key === 'F') smoothView({ fit: { eles: cy.nodes(), padding: 40 } });
+  if (e.key === 'f' || e.key === 'F') smoothView({ fit: { eles: diagramNodes(), padding: 40 } });
   if (e.key === 'Enter' && S.selected && S.model.byId.has(S.selected)) toggle(S.selected, true);
   if (e.key === 'Backspace' && S.selected && S.model.byId.has(S.selected)) {
     const p = S.expanded.has(S.selected) ? S.selected : S.model.parent(S.selected);

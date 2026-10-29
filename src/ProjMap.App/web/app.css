@@ -66,7 +66,8 @@ button.toggle.on { color: var(--ok); }
 
 #progress { position: absolute; top: 56px; left: 0; right: 0; height: 22px; z-index: 20; display: flex; align-items: center; pointer-events: none; }
 #progress .bar { position: absolute; left: 0; top: 0; height: 3px; background: linear-gradient(90deg, var(--accent), var(--accent2)); transition: width .3s; }
-#progress .label { margin: 6px auto 0; font-size: 12px; color: var(--muted); background: var(--panel); padding: 3px 10px; border-radius: 6px; box-shadow: var(--shadow); }
+/* the scan status sits at the bottom of the window: at the top it covered the arrow-layer chips */
+#progress .label { position: fixed; left: 50%; bottom: 56px; transform: translateX(-50%); font-size: 12px; color: var(--muted); background: var(--panel); padding: 3px 10px; border-radius: 6px; box-shadow: var(--shadow); }
 
 main { display: flex; height: calc(100% - 56px); }
 
@@ -154,9 +155,23 @@ main { display: flex; height: calc(100% - 56px); }
 .head .orig { color: var(--muted); font-size: 13px; }
 .path { font-family: "Cascadia Mono", Consolas, monospace; font-size: 12px; color: var(--accent); cursor: pointer; word-break: break-all; margin-top: 6px; display: inline-block; }
 .path:hover { text-decoration: underline; }
-.what { margin-top: 12px; padding: 10px 12px; border-radius: 8px; background: var(--panel2); line-height: 1.5; color: var(--text2); }
+.what { margin-top: 12px; padding: 12px 14px; border-radius: 8px; background: var(--panel2); color: var(--text2); }
 .what b { color: var(--text); }
-.what .src { display: block; margin-top: 6px; font-size: 12.5px; color: var(--muted); }
+.what.scroll { max-height: 320px; overflow: auto; }
+
+/* Prose in the panels: justified with hyphenation, real paragraphs, small headings between parts. */
+.prose { font-size: 14px; line-height: 1.55; text-align: justify; hyphens: auto; -webkit-hyphens: auto; text-wrap: pretty; }
+.prose h4 { margin: 14px 0 4px; font-size: 11.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); text-align: left; hyphens: none; }
+.prose h4:first-child { margin-top: 0; }
+.prose p { margin: 0 0 8px; }
+.prose p.short { text-align: left; }
+.prose p:last-child, .prose ul:last-child, .prose ol:last-child { margin-bottom: 0; }
+.prose ul, .prose ol { margin: 4px 0 8px; padding-left: 20px; }
+.prose li { margin: 3px 0; }
+.prose li::marker { color: var(--muted); }
+.prose code { font-family: "Cascadia Mono", Consolas, monospace; font-size: 12.5px; padding: 0 4px; border-radius: 4px; background: var(--panel); }
+/* short notes under headings and inside lists: justified too, but smaller */
+.gd, .cat-d, .tabintro, .empty, .howto li, #legend .lg.muted { text-align: justify; hyphens: auto; -webkit-hyphens: auto; text-wrap: pretty; }
 .actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
 .actions button { font-size: 12.5px; padding: 5px 10px; }
 .actions button.main { background: var(--accent); color: #fff; border-color: var(--accent); }

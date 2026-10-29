@@ -5,10 +5,13 @@ using System.Text.Json;
 namespace ProjMap.App;
 
 /// Per-user state under %LOCALAPPDATA%\projmap: recent projects and cached graphs.
-/// Scanned repositories are never written to.
+/// Scanned repositories are never written to. PROJMAP_HOME moves the whole store elsewhere, so an
+/// automated run (perf, e2e) never shares state with the owner's open window.
 static class AppStore
 {
-    public static readonly string Dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "projmap");
+    public static readonly string Dir = Environment.GetEnvironmentVariable("PROJMAP_HOME") is { Length: > 0 } home
+        ? Path.GetFullPath(home)
+        : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "projmap");
     static readonly string RecentFile = Path.Combine(Dir, "recent.json");
 
     public sealed record RecentProject(string Root, string Name, DateTimeOffset OpenedAt);

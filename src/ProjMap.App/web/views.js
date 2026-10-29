@@ -14,7 +14,8 @@ function viewElements(view) {
 }
 
 function node(id, data) {
-  return { group: 'nodes', data: { id, z: data.frame ? 1 : 20, tw: (data.w || 200) - 14, label: '', ...data } };
+  // a negative text width is invalid and makes Cytoscape warn for every element
+  return { group: 'nodes', pannable: true, data: { id, z: data.frame ? 1 : 20, tw: Math.max(20, (data.w || 200) - 14), label: '', ...data } };
 }
 function frameNode(id, name, pid, col, depth = 0) {
   return node(id, { kind: 'vframe', frame: true, name, pid: pid || null, w: 10, h: 10, z: 1 + depth, fill: col.fill, line: col.line, soft: col.soft });
@@ -104,12 +105,16 @@ function buildPlanElements() {
 
 // Plan layout without ELK (there are no arrows to route): every frame packs its children into
 // rows of a width that keeps the frame close to the screen's proportions; frames grow around them.
-function packLayout() {
-  const kids = new Map(), roots = [];
-  cy.nodes().forEach(n => {
-    const p = n.data('pid');
-    if (p && cy.getElementById(p).nonempty()) { if (!kids.has(p)) kids.set(p, []); kids.get(p).push(n); } else roots.push(n);
-  });
+// Works on the element list before it is put on screen (positions and frame sizes are written into it).
+function packLayout(els) {
+  const kids = new Map(), roots = [], ids = new Set(els.map(e => e.data.id));
+  // the same small interface the packing below used on Cytoscape nodes
+  const wrap = e => ({ id: () => e.data.id, data: (k) => typeof k === 'string' ? e.data[k] : Object.assign(e.data, k), position: p => { e.position = p; } });
+  for (const e of els) {
+    if (e.group !== 'nodes') continue;
+    const n = wrap(e), p = e.data.pid;
+    if (p && ids.has(p)) { if (!kids.has(p)) kids.set(p, []); kids.get(p).push(n); } else roots.push(n);
+  }
   const GAP = 26, PAD = 28, TOP = 72;
   const aspect = Math.max(1, cy.width() / Math.max(1, cy.height()));
   const size = new Map();
@@ -160,7 +165,7 @@ function packLayout() {
     }
   };
   const top = shelf(roots.map(n => ({ n, ...measure(n) })), aspect);
-  cy.batch(() => placeRows(top, 0, 0));
+  placeRows(top, 0, 0);
 }
 
 // ---------------------------------------------------------------- База данных

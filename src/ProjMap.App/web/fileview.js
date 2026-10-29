@@ -129,12 +129,14 @@ function buildFileElements() {
   const result = dedupeEdges(els);
   // A huge file (hundreds of functions, thousands of links) can't be read as one web and takes ELK
   // seconds: lay out the strongest links, keep the rest hidden until a function is selected.
+  // The rest are not even put on the diagram (1400 hidden arrows still cost ~80 ms to draw the first time):
+  // applySelection adds the selected function's ones.
   const edges = result.filter(e => e.group === 'edges').sort((a, b) => b.data.w - a.data.w);
-  if (edges.length > MAX_FILE_EDGES) {
-    for (const e of edges.slice(MAX_FILE_EDGES)) e.classes += ' overlay';
-    FV.hiddenEdges = edges.length - MAX_FILE_EDGES;
-  } else FV.hiddenEdges = 0;
-  return result;
+  FV.extraEdges = edges.slice(MAX_FILE_EDGES);
+  FV.hiddenEdges = FV.extraEdges.length;
+  if (!FV.hiddenEdges) return result;
+  const extra = new Set(FV.extraEdges);
+  return result.filter(e => !extra.has(e));
 }
 
 // ---- code pane
@@ -154,8 +156,18 @@ async function loadCode(fid) {
   if (FV.text == null) { $('#codeBody').innerHTML = '<div class="muted" style="padding:16px">Файл не удалось прочитать.</div>'; return; }
   const lang = (n.language || '').toLowerCase();
   const lines = FV.text.replace(/\r/g, '').split('\n');
-  $('#codeBody').innerHTML = lines.map((l, i) => `<div class="cl" data-line="${i + 1}"><span class="ln">${i + 1}</span><span class="cx">${highlight(l, lang) || ' '}</span></div>`).join('');
+  // a 4000-line file highlighted in one go froze the window for half a second: the first screen now, the rest
+  // a few hundred lines per frame (the diagram is being built at the same time)
+  const html = (from, to) => lines.slice(from, to).map((l, k) => { const i = from + k; return `<div class="cl" data-line="${i + 1}"><span class="ln">${i + 1}</span><span class="cx">${highlight(l, lang) || ' '}</span></div>`; }).join('');
+  const body = $('#codeBody'), FIRST = 200, PART = 400;
+  body.innerHTML = html(0, FIRST);
   markCode();
+  for (let i = FIRST; i < lines.length; i += PART) {
+    await new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));
+    if (FV.file !== fid || FV.textFor !== fid) return; // another file was opened meanwhile
+    body.insertAdjacentHTML('beforeend', html(i, i + PART));
+  }
+  if (lines.length > FIRST) markCode();
 }
 
 // Lines of the selected function/class: from its line to the line before the next one in the file.
