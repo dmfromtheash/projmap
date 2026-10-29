@@ -118,6 +118,20 @@ internal sealed class XamlScanner : IRepositoryScanner
                     var snippet = element.Name.LocalName + (name == null ? "" : " #" + name) + " " + attribute;
                     return new(file.Path, ((IXmlLineInfo)attribute).LineNumber, snippet);
                 }
+                void Entry(XElement element, XAttribute attribute, Node target)
+                {
+                    var caption = element.Attribute("Content") ?? element.Attribute("Text") ?? element.Attribute("Header");
+                    var name = XamlAttribute(element, "Name")?.Value ?? element.Attribute("Name")?.Value;
+                    var line = ((IXmlLineInfo)attribute).LineNumber;
+                    c.EntryPoints.Add(new()
+                    {
+                        Id = $"entry:{file.Path}:{line}:{attribute.Name.LocalName}:{target.Id}",
+                        Path = file.Path, Line = line, ControlName = name, Label = caption?.Value,
+                        LabelLine = caption == null ? null : ((IXmlLineInfo)caption).LineNumber,
+                        LabelKind = caption == null ? null : caption.Value.TrimStart().StartsWith('{') ? "expression" : "literal",
+                        Event = attribute.Name.LocalName, Detection = "xaml-attribute", HandlerIds = [target.Id]
+                    });
+                }
                 var classAttribute = XamlAttribute(root, "Class");
                 var codeBehind = FindType(classAttribute?.Value);
                 if (codeBehind != null) c.Edge(EdgeKinds.Reference, fileId, codeBehind.Id, Evidence(classAttribute!));
@@ -131,13 +145,17 @@ internal sealed class XamlScanner : IRepositoryScanner
                             Member(codeBehind, value, true) is { } handler)
                         {
                             c.Edge(EdgeKinds.XamlEvent, fileId, handler.Id, Evidence(attribute));
+                            Entry(element, attribute, handler);
                             var current = c.Graph.Nodes[handler.Id];
                             c.Graph.Nodes[handler.Id] = current with
                             { Tags = current.Tags.Concat(["callback", "xaml-handler"]).Distinct().Order(StringComparer.Ordinal).ToList() };
                         }
                         if (attribute.Name.Namespace == XNamespace.None && attribute.Name.LocalName == "Command" &&
                             BindingPath(element, value) is { } path && Member(ContextType(element), path, false) is { } command)
+                        {
                             c.Edge(EdgeKinds.Binding, fileId, command.Id, Evidence(attribute));
+                            Entry(element, attribute, command);
+                        }
                     }
                 }
             }

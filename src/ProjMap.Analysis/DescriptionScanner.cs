@@ -17,6 +17,7 @@ internal sealed class DescriptionScanner : IRepositoryScanner
             // architecture / readme docs describe structure best
             .OrderByDescending(f => Regex.IsMatch(Path.GetFileName(f.Path), @"ARCH|README|STRUCTURE|OVERVIEW|АРХИТ", RegexOptions.IgnoreCase))
             .ThenBy(f => f.Path.Count(ch => ch == '/'))
+            .ThenBy(f => f.Path, StringComparer.Ordinal)
             .ToArray();
         var targets = c.Graph.Nodes.Values
             .Where(n => (n.Kind is NodeKinds.Module or NodeKinds.Folder) && string.IsNullOrWhiteSpace(n.Summary))
@@ -30,13 +31,15 @@ internal sealed class DescriptionScanner : IRepositoryScanner
             ch => ch, ch => new Regex("^" + Regex.Escape(ch.ToString()) + "$", RegexOptions.IgnoreCase));
         var byInitial = new Dictionary<char, (Node Node, string Key, Regex Pattern)[]>();
 
-        var found = new Dictionary<string, string>(StringComparer.Ordinal);
+        var found = new Dictionary<string, (string Text, SourceLocation Source)>(StringComparer.Ordinal);
         foreach (var doc in docs)
         {
             ct.ThrowIfCancellationRequested();
             if (doc.Text(c) is not { } text) continue;
+            var lineNumber = 0;
             foreach (var raw in text.Replace("\r", "").Split('\n'))
             {
+                lineNumber++;
                 if (raw.Length > 400) continue;
                 var line = raw.Trim().TrimStart('-', '*', '+', '|', ' ', '\t');
                 var prefix = line.TrimStart('`', '*', '_', '[');
@@ -56,13 +59,13 @@ internal sealed class DescriptionScanner : IRepositoryScanner
                     if (!m.Success) continue;
                     var d = Clean(m.Groups["d"].Value);
                     if (d.Length < 12 || !d.Any(char.IsLetter)) continue;
-                    found[node.Id] = d;
+                    found[node.Id] = (d, new(doc.Path, lineNumber, raw.Trim()));
                 }
             }
             if (found.Count == targets.Count) break;
         }
         foreach (var (id, d) in found)
-            c.Graph.Nodes[id] = c.Graph.Nodes[id] with { Summary = d };
+            c.Graph.Nodes[id] = c.Graph.Nodes[id] with { Summary = d.Text, SummarySource = d.Source };
         return Task.CompletedTask;
     }
 

@@ -298,7 +298,8 @@ public sealed class ScannerTests
         var reports = new List<ScanProgress>();
         await ProjectScanner.ScanAsync(new(repo.Root) { Progress = new CallbackProgress(reports.Add) });
         Assert.Equal(0, reports.First().Fraction); Assert.Equal(1, reports.Last().Fraction);
-        Assert.Equal(10, reports.Count);
+        Assert.Equal(11, reports.Count);
+        Assert.Contains(reports, r => r.Stage == "explanations");
         Assert.Contains(reports, r => r.Stage == "views");
         Assert.Contains(reports, r => r.Stage == "xaml");
         using var source = new CancellationTokenSource(); source.Cancel();

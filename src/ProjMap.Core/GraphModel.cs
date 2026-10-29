@@ -8,7 +8,7 @@ namespace ProjMap.Core;
 /// Contract rules (see docs/GRAPH_CONTRACT.md):
 ///  - Nodes form one tree through <see cref="Node.ParentId"/> (system → module → folder → file → type → member).
 ///    Roadmap items, docs and database tables are separate roots (ParentId = their group node).
-///  - Edges are stored at the finest level known (file or type). The viewer rolls them up to folders/modules.
+///  - Edges are stored at the finest level known (including members/handlers). The viewer rolls them up.
 ///  - Ids derive from paths / fully qualified names; handlers retain legacy ordinals with optional stable anchors.
 /// </summary>
 public sealed record ProjectGraph
@@ -73,9 +73,15 @@ public sealed record Node
     /// Optional handler identity: owner member id + "|" + control name (or label).
     public string? Anchor { get; init; }
     public string? Summary { get; init; }      // XML doc summary / first doc comment / first markdown paragraph
+    /// Exact declarations, including all parts of a C# type. Null in older graphs.
+    public List<NodeDeclaration>? Declarations { get; init; }
+    /// Source of a Markdown-derived summary; declaration comments live with their declaration.
+    public SourceLocation? SummarySource { get; init; }
     public NodeMetrics Metrics { get; init; } = new();
     public List<string> Tags { get; init; } = []; // e.g. "test", "ui", "generated", "entrypoint", "hot"
 }
+
+public sealed record NodeDeclaration(string Path, int Line, int EndLine, string? Summary = null, int? SummaryLine = null);
 
 public sealed record NodeMetrics
 {
@@ -233,10 +239,118 @@ public static class GraphJson
             roadmap = g.Roadmap,
             database = g.Database,
             warnings = g.Warnings,
-            views = g.Views,
+            views = g.Views == null ? null : new
+            {
+                g.Views.SchemaVersion, g.Views.RuleSet, g.Views.Tiers, g.Views.Assignments, g.Views.Features,
+                g.Views.Memberships, g.Views.StaleOverrides, g.Views.Timeline, g.Views.EntryPoints,
+                explanations = CompactExplanations(g.Views.Explanations, Ref)
+            },
             problems = g.Problems,
         };
         return JsonSerializer.SerializeToUtf8Bytes(doc, Options);
     }
-    public static ProjectGraph? Deserialize(string json) => JsonSerializer.Deserialize<ProjectGraph>(json, Options);
+    public static ProjectGraph? Deserialize(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+        if (root.ValueKind == JsonValueKind.Null) return null;
+        if (!root.TryGetProperty("compact", out var compact) || compact.GetInt32() != 1)
+            return JsonSerializer.Deserialize<ProjectGraph>(json, Options);
+        // Expand edge tuples and the optional explanation text/source tables before DTO reading.
+        var nodes = root.GetProperty("nodes").EnumerateArray().Select(n => n.GetProperty("id").GetString()!).ToList();
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream))
+        {
+            writer.WriteStartObject();
+            foreach (var property in root.EnumerateObject())
+            {
+                if (property.Name == "edges") continue;
+                if (property.Name == "views" && property.Value.ValueKind == JsonValueKind.Object)
+                {
+                    writer.WritePropertyName("views"); writer.WriteStartObject();
+                    foreach (var viewProperty in property.Value.EnumerateObject())
+                    {
+                        if (viewProperty.Name == "explanations" && viewProperty.Value.ValueKind == JsonValueKind.Object &&
+                            viewProperty.Value.TryGetProperty("compact", out _))
+                        {
+                            writer.WritePropertyName("explanations");
+                            JsonSerializer.Serialize(writer, ExpandExplanations(viewProperty.Value, nodes), Options);
+                        }
+                        else viewProperty.WriteTo(writer);
+                    }
+                    writer.WriteEndObject();
+                }
+                else property.WriteTo(writer);
+            }
+            writer.WriteEndObject();
+        }
+        var graph = JsonSerializer.Deserialize<ProjectGraph>(stream.ToArray(), Options)!;
+        var kinds = root.GetProperty("edgeKinds").EnumerateArray().Select(k => k.GetString()!).ToArray();
+        string Ref(JsonElement value) => value.ValueKind == JsonValueKind.Number ? graph.Nodes[value.GetInt32()].Id : value.GetString()!;
+        var edges = root.GetProperty("edges").EnumerateArray().Select(row =>
+        {
+            var kind = kinds[row[0].GetInt32()]; var source = Ref(row[1]); var target = Ref(row[2]);
+            return new Edge
+            {
+                Id = $"{kind}:{source}->{target}", Kind = kind, Source = source, Target = target, Weight = row[3].GetInt32(),
+                Evidence = row.GetArrayLength() < 5 ? [] : row[4].EnumerateArray().Select(e =>
+                    new SourceLocation(e[0].GetString()!, e[1].GetInt32(), e.GetArrayLength() > 2 ? e[2].GetString() : null)).ToList()
+            };
+        }).ToList();
+        var maxima = edges.GroupBy(e => e.Kind).ToDictionary(g => g.Key, g => g.Max(e => e.Weight));
+        return graph with { Edges = edges.Select(e => e with { Strength = (double)e.Weight / maxima[e.Kind] }).ToList() };
+    }
+
+    private static object? CompactExplanations(ExplanationsInfo? info, Func<string, object> nodeRef)
+    {
+        if (info == null) return null;
+        var texts = new List<string>(); var indexes = new Dictionary<string, int>(StringComparer.Ordinal);
+        int Text(string value)
+        {
+            if (indexes.TryGetValue(value, out var old)) return old;
+            var index = texts.Count; indexes[value] = index; texts.Add(value); return index;
+        }
+        object Claim(ExplanationClaim claim) => new object[] { Text(claim.Text), claim.Confidence switch
+            { ExplanationConfidence.Known => 0, ExplanationConfidence.Derived => 1, _ => 2 }, claim.SourceIds };
+        var profiles = info.Nodes.Select(n => n.Claims is not { Count: > 0 }
+            ? new object[] { nodeRef(n.NodeId), Claim(n.DisplayName), Claim(n.Description) }
+            : new object[] { nodeRef(n.NodeId), Claim(n.DisplayName), Claim(n.Description), n.Claims.Select(Claim).ToList() }).ToList();
+        object? OptionalText(string? value) => value == null ? null : Text(value);
+        var sourceRows = info.Sources.Select(s =>
+        {
+            var row = new object?[] { Text(s.Kind), OptionalText(s.Path), s.Line, s.EndLine, OptionalText(s.SourceHash),
+                OptionalText(s.CommitId), OptionalText(s.RuleId), OptionalText(s.Reference), OptionalText(s.Text) };
+            return row.Take(Array.FindLastIndex(row, x => x != null) + 1).ToArray();
+        }).ToList();
+        return new { info.SchemaVersion, compact = 1, info.Language, info.RuleSet, texts, nodes = profiles, sources = sourceRows, info.NameIndex };
+    }
+
+    private static ExplanationsInfo ExpandExplanations(JsonElement value, List<string> nodeIds)
+    {
+        var texts = value.GetProperty("texts").EnumerateArray().Select(t => t.GetString()!).ToList();
+        ExplanationClaim Claim(JsonElement row) => new(texts[row[0].GetInt32()], row[1].GetInt32() switch
+        { 0 => ExplanationConfidence.Known, 1 => ExplanationConfidence.Derived, 2 => ExplanationConfidence.Guessed,
+            _ => throw new JsonException("Unknown explanation confidence.") }, row[2].EnumerateArray().Select(i => i.GetInt32()).ToList());
+        string? Text(JsonElement row, int index) => row.GetArrayLength() > index && row[index].ValueKind != JsonValueKind.Null
+            ? texts[row[index].GetInt32()] : null;
+        int? Number(JsonElement row, int index) => row.GetArrayLength() > index && row[index].ValueKind != JsonValueKind.Null
+            ? row[index].GetInt32() : null;
+        return new()
+        {
+            SchemaVersion = value.GetProperty("schemaVersion").GetInt32(), Language = value.GetProperty("language").GetString()!,
+            RuleSet = value.GetProperty("ruleSet").GetString()!,
+            Sources = value.GetProperty("sources").EnumerateArray().Select(row => new ExplanationSource
+            {
+                Kind = Text(row, 0)!, Path = Text(row, 1), Line = Number(row, 2), EndLine = Number(row, 3),
+                SourceHash = Text(row, 4), CommitId = Text(row, 5), RuleId = Text(row, 6), Reference = Text(row, 7), Text = Text(row, 8)
+            }).ToList(),
+            NameIndex = value.GetProperty("nameIndex").Deserialize<Dictionary<string, List<int>>>(Options)!,
+            Nodes = value.GetProperty("nodes").EnumerateArray().Select(row => new NodeExplanation
+            {
+                NodeId = row[0].ValueKind == JsonValueKind.Number ? nodeIds[row[0].GetInt32()] : row[0].GetString()!,
+                DisplayName = Claim(row[1]), Description = Claim(row[2]),
+                Claims = row.GetArrayLength() > 3 ? row[3].EnumerateArray().Select(Claim).ToList() : null
+            }).ToList()
+        };
+    }
 }

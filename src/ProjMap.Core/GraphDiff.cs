@@ -43,8 +43,11 @@ public static class GraphDiff
             // The root node is named after the scanned folder, which is scan metadata like Project.Root.
             var name = n.Kind == NodeKinds.System ? "" : n.Name;
             var line = ignorePositions ? null : n.Line;
+            var declarations = string.Join(';', (n.Declarations ?? []).Select(d =>
+                $"{d.Path}:{(ignorePositions ? null : d.Line)}:{(ignorePositions ? null : d.EndLine)}:{d.Summary}:{(ignorePositions ? null : d.SummaryLine)}"));
+            var summarySource = n.SummarySource is { } source ? $"{source.Path}:{(ignorePositions ? null : source.Line)}:{source.Snippet}" : "";
             return $"{n.Kind}|{name}|{n.ParentId}|{n.Path}|{line}|{n.Language}|{n.SubKind}|{n.Anchor}|{n.Summary}|{string.Join(',', n.Tags)}" +
-                   $"|{m.Loc}|{m.Files}|{m.Types}|{m.Members}|{m.Complexity}{git}";
+                   $"|{declarations}|{summarySource}|{m.Loc}|{m.Files}|{m.Types}|{m.Members}|{m.Complexity}{git}";
         }
         string EdgeKey(Edge e) => ignorePositions ? $"{e.Weight}"
             : $"{e.Weight}|{e.Strength:R}|{string.Join(';', e.Evidence.Select(x => $"{x.Path}:{x.Line}:{x.Snippet}"))}";
@@ -60,11 +63,11 @@ public static class GraphDiff
             Edges = Section(a.Edges.Where(KeepEdge), b.Edges.Where(KeepEdge), e => e.Id, EdgeKey),
             Roadmap = Section(a.Roadmap, b.Roadmap, r => r.Id, RoadmapKey),
             Database = Section(a.Database?.Tables ?? [], b.Database?.Tables ?? [], t => t.Name, TableKey),
-            Views = Section(ViewItems(a.Views), ViewItems(b.Views), x => x.Id, x => x.Content),
+            Views = Section(ViewItems(a.Views, ignoreGit, ignorePositions), ViewItems(b.Views, ignoreGit, ignorePositions), x => x.Id, x => x.Content),
         };
     }
 
-    static IEnumerable<(string Id, string Content)> ViewItems(ViewsInfo? v)
+    static IEnumerable<(string Id, string Content)> ViewItems(ViewsInfo? v, bool ignoreGit, bool ignorePositions)
     {
         if (v == null) yield break;
         yield return ("ruleSet", v.RuleSet);
@@ -72,6 +75,21 @@ public static class GraphDiff
             yield return ("tier:" + t.NodeId, $"{t.Tier}|{t.Decision}|{t.Score:R}|{t.Role}|{t.Execution}|{string.Join(',', t.Alternatives ?? [])}");
         foreach (var f in v.Features) yield return (f.Id, $"{f.Name}|{f.State}|{string.Join(',', f.Terms)}");
         foreach (var m in v.Memberships) yield return ($"member:{m.FeatureId}|{m.NodeId}", $"{m.Role}|{m.Score:R}");
+        if (v.Explanations is { } explanations)
+        {
+            string? ClaimKey(ExplanationClaim claim)
+            {
+                var sources = claim.SourceIds.Select(i => explanations.Sources[i]).Where(s => !ignoreGit || s.Kind != "git").ToList();
+                if (sources.Count == 0) return null;
+                // Content hashes cover the full file and can change because an unrelated line moved.
+                // Compare meaningful source text/location instead, preserving IgnorePositions semantics.
+                return claim.Text + "|" + claim.Confidence + "|" + string.Join(';', sources.Select(s =>
+                    $"{s.Kind}:{s.Path}:{(ignorePositions ? null : s.Line)}:{(ignorePositions ? null : s.EndLine)}:{s.CommitId}:{s.RuleId}:{s.Reference}:{s.Text}"));
+            }
+            foreach (var profile in explanations.Nodes)
+                yield return ("explanation:" + profile.NodeId, string.Join('\n', new[] { profile.DisplayName, profile.Description }
+                    .Concat(profile.Claims ?? []).Select(ClaimKey).OfType<string>()));
+        }
     }
 
     static GraphDiffSection Section<T>(IEnumerable<T> a, IEnumerable<T> b, Func<T, string> id, Func<T, string> content)

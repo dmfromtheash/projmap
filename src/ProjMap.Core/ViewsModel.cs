@@ -19,6 +19,8 @@ public sealed record ViewsInfo
     public List<string> StaleOverrides { get; init; } = [];
     /// Commits of the scanned window and roadmap stages linked to them; null without git history.
     public TimelineInfo? Timeline { get; init; }
+    public ExplanationsInfo? Explanations { get; init; }
+    public List<EntryPointInfo>? EntryPoints { get; init; }
 }
 
 /// <summary>History inside the scan window: what changed when, and which stage did it. Only paths that exist today
@@ -130,8 +132,11 @@ public sealed record ViewsOverrides
     public List<string> HiddenFeatures { get; init; } = [];
     public List<FeatureDefinition> AddedFeatures { get; init; } = [];
     public List<FeatureMemberOverride> Members { get; init; } = [];
+    public List<ExplanationOverride> Explanations { get; init; } = [];
+    /// Project-scoped translations of whole identifiers or individual words; unknown abbreviations are left intact.
+    public Dictionary<string, string> ExplanationWords { get; init; } = new(StringComparer.OrdinalIgnoreCase);
     public bool IsEmpty => Tiers.Count == 0 && FeatureNames.Count == 0 && FeatureMerges.Count == 0 &&
-        HiddenFeatures.Count == 0 && AddedFeatures.Count == 0 && Members.Count == 0;
+        HiddenFeatures.Count == 0 && AddedFeatures.Count == 0 && Members.Count == 0 && Explanations.Count == 0 && ExplanationWords.Count == 0;
 }
 
 /// <summary>Exactly one of <see cref="NodeId"/> (exact) or <see cref="PathGlob"/> selects the files.</summary>

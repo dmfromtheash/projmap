@@ -45,7 +45,7 @@ public static class ProjectScanner
         var samePaths = false;
         var sameGit = false;
         IRepositoryScanner[] scanners = [new StructureScanner(), new CSharpScanner(), new XamlScanner(), new ImportScanner(),
-            new GitScanner(), new RoadmapScanner(), new DatabaseScanner(), new DescriptionScanner(), new ViewsScanner()];
+            new GitScanner(), new RoadmapScanner(), new DatabaseScanner(), new DescriptionScanner(), new ViewsScanner(), new ExplanationScanner()];
         for (var i = 0; i < scanners.Length; i++)
         {
             ct.ThrowIfCancellationRequested();
@@ -157,6 +157,8 @@ internal sealed class ScanContext
     public Dictionary<string, RepoFile> Files { get; } = new(StringComparer.OrdinalIgnoreCase);
     public List<RepoModule> Modules { get; } = [];
     public List<GitCommit> Commits { get; } = [];
+    public List<EntryPointInfo> EntryPoints { get; } = [];
+    public ViewsOverrides? ProjectViewOverrides { get; set; }
     public bool IsGit { get; set; }
     public ScanContext(ScanOptions options)
     {
@@ -178,7 +180,12 @@ internal sealed class ScanContext
     public void Warn(string scanner, string message, string? path = null) => Graph.Warnings.Enqueue(new(scanner, message, path));
     public void Add(Node node) => Graph.Nodes.TryAdd(node.Id, node);
     public void AddDeclared(Node node) => Graph.Nodes.AddOrUpdate(node.Id, node, (_, old) =>
-        StringComparer.Ordinal.Compare(node.Path, old.Path) < 0 || node.Path == old.Path && node.Line < old.Line ? node : old);
+    {
+        var canonical = StringComparer.Ordinal.Compare(node.Path, old.Path) < 0 || node.Path == old.Path && node.Line < old.Line ? node : old;
+        return canonical with { Declarations = old.Declarations == null && node.Declarations == null ? null :
+            (old.Declarations ?? []).Concat(node.Declarations ?? []).Distinct().OrderBy(d => d.Path, StringComparer.Ordinal)
+                .ThenBy(d => d.Line).ToList() };
+    });
     public void Merge(Edge edge) => Graph.Edges.AddOrUpdate(edge.Id, edge, (_, old) => old with
     {
         Weight = old.Weight + edge.Weight,

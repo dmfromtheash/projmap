@@ -69,8 +69,10 @@ internal sealed partial class CSharpScanner : IRepositoryScanner
         public SyntaxTree Tree { get; } = tree;
         public string Hash { get; } = hash;
         public List<Node> Nodes { get; } = [];
+        public List<EntryPointInfo> EntryPoints { get; } = [];
         public List<(string Id, ExpressionSyntax Callback, SyntaxNode Declaration)> Handlers { get; } = [];
         public Dictionary<string, TypeInfo> Types { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, List<NodeDeclaration>> TypeDeclarations { get; } = new(StringComparer.Ordinal);
         public List<Edge> Edges { get; set; } = [];
         public List<string>? FileTags { get; set; }
     }
@@ -230,6 +232,13 @@ internal sealed partial class CSharpScanner : IRepositoryScanner
                     return ValueTask.CompletedTask;
                 });
         }
+        // Body-only edits can shift the range of a noncanonical part without invalidating other files.
+        // Reassemble positions from each file's current result, never the canonical node's cached copy.
+        foreach (var group in units.Values.SelectMany(u => u.Results.Values).SelectMany(r => r.TypeDeclarations)
+                     .GroupBy(p => p.Key, StringComparer.Ordinal))
+            if (c.Graph.Nodes.TryGetValue(group.Key, out var node))
+                c.Graph.Nodes[node.Id] = node with { Declarations = group.SelectMany(p => p.Value)
+                    .OrderBy(d => d.Path, StringComparer.Ordinal).ThenBy(d => d.Line).ToList() };
         using (c.Measure("csharp.walk"))
             await Parallel.ForEachAsync(work, parallel, (item, token) =>
             {
@@ -240,6 +249,9 @@ internal sealed partial class CSharpScanner : IRepositoryScanner
                 return ValueTask.CompletedTask;
             });
         // Visibility depends on uses in other partial files, even when their bodies alone changed.
+        // Publish registrations before this independent heuristic: a visibility failure must not
+        // discard already observed captions and callback source locations.
+        foreach (var result in units.Values.SelectMany(u => u.Results.Values)) c.EntryPoints.AddRange(result.EntryPoints);
         foreach (var unit in units.Values) RefreshNotShown(c, unit, ct);
         foreach (var unit in units.Values.OrderBy(u => u.Module.Id, StringComparer.Ordinal))
             foreach (var result in unit.Results.Values.OrderBy(r => r.Tree.FilePath, StringComparer.Ordinal))
@@ -289,6 +301,24 @@ internal sealed partial class CSharpScanner : IRepositoryScanner
     private static string Key(INamedTypeSymbol symbol) => symbol.ContainingAssembly.Identity.Name + ":" + symbol.OriginalDefinition.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
     private static string Fqn(INamedTypeSymbol symbol) => symbol.OriginalDefinition.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat).Replace("global::", "", StringComparison.Ordinal);
     private static int Line(SyntaxNode node) => node.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
+    private static NodeDeclaration Declaration(SyntaxNode node)
+    {
+        // Read this declaration's trivia, not the symbol's combined XML (partial comments can differ).
+        var doc = node.GetLeadingTrivia().Select(t => t.GetStructure()).OfType<DocumentationCommentTriviaSyntax>().FirstOrDefault();
+        var summary = doc?.Content.OfType<XmlElementSyntax>().FirstOrDefault(e => e.StartTag.Name.LocalName.ValueText == "summary");
+        string? text = null;
+        if (summary != null)
+        {
+            try
+            {
+                var xml = Regex.Replace(summary.ToFullString(), @"(?m)^\s*/// ?", "");
+                text = Regex.Replace(XElement.Parse(xml).Value, @"\s+", " ").Trim();
+            }
+            catch (System.Xml.XmlException) { /* malformed XML is not invented documentation */ }
+        }
+        return new(node.SyntaxTree.FilePath, Line(node), node.GetLocation().GetLineSpan().EndLinePosition.Line + 1,
+            string.IsNullOrWhiteSpace(text) ? null : text, text == null ? null : Line(summary!));
+    }
     private static string? Summary(ISymbol symbol, CancellationToken ct)
     {
         var xml = symbol.GetDocumentationCommentXml(cancellationToken: ct);
@@ -312,6 +342,8 @@ internal sealed partial class CSharpScanner : IRepositoryScanner
             {
                 if (model.GetDeclaredSymbol(declaration, ct) is not INamedTypeSymbol symbol) continue;
                 var id = "type:" + u.Module.Id + ":" + Fqn(symbol);
+                if (!result.TypeDeclarations.TryGetValue(id, out var localDeclarations)) result.TypeDeclarations[id] = localDeclarations = [];
+                localDeclarations.Add(Declaration(declaration));
                 var canonical = symbol.DeclaringSyntaxReferences.OrderBy(r => r.SyntaxTree.FilePath, StringComparer.Ordinal).ThenBy(r => r.Span.Start).First();
                 types[Key(symbol)] = result.Types[Key(symbol)] = new(id, canonical.SyntaxTree.FilePath, u.Module.Id);
                 if (canonical.SyntaxTree != tree || canonical.Span != declaration.Span) continue;
@@ -328,6 +360,8 @@ internal sealed partial class CSharpScanner : IRepositoryScanner
                     ParentId = parent,
                     Language = "C#",
                     Summary = Summary(symbol, ct),
+                    Declarations = symbol.DeclaringSyntaxReferences.Select(r => Declaration(r.GetSyntax(ct)))
+                        .OrderBy(d => d.Path, StringComparer.Ordinal).ThenBy(d => d.Line).ToList(),
                     Tags = file.Tags,
                     Metrics = new() { Types = 1 }
                 });
@@ -359,12 +393,15 @@ internal sealed partial class CSharpScanner : IRepositoryScanner
                 Line = Line(declaration),
                 Language = "C#",
                 Summary = Summary(symbol, ct),
+                Declarations = [Declaration(declaration)],
                 Tags = tags,
                 Metrics = new() { Members = 1, Complexity = Complexity(declaration) }
             });
             foreach (var (lambda, id, label) in Handlers(declaration, "member:" + u.Module.Id + ":" + signature, model, ct))
             {
                 result.Handlers.Add((id, lambda, declaration));
+                var anchor = "member:" + u.Module.Id + ":" + signature + "|" + HandlerAnchor(lambda, label, model, ct);
+                result.EntryPoints.Add(HandlerEntry(lambda, id, anchor, model, ct));
                 Add(new Node
                 {
                     Id = id,
@@ -375,7 +412,8 @@ internal sealed partial class CSharpScanner : IRepositoryScanner
                     Path = tree.FilePath,
                     Line = Line(lambda),
                     Language = "C#",
-                    Anchor = "member:" + u.Module.Id + ":" + signature + "|" + HandlerAnchor(lambda, label, model, ct),
+                    Anchor = anchor,
+                    Declarations = [Declaration(lambda)],
                     Tags = LibraryOnly(lambda, model, ct) ? [.. file.Tags, "handler", "library-only"] : [.. file.Tags, "handler"],
                     Metrics = new() { Members = 1, Complexity = Complexity(lambda) }
                 });
@@ -401,6 +439,7 @@ internal sealed partial class CSharpScanner : IRepositoryScanner
                 Line = Line(declaration),
                 Language = "C#",
                 Summary = Summary(symbol, ct),
+                Declarations = [Declaration(declaration.Parent!.Parent!) with { Line = Line(declaration) }],
                 Tags = native ? [.. file.Tags, "interop"] : file.Tags,
                 Metrics = new() { Members = 1 }
             });

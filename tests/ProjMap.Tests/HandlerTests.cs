@@ -280,7 +280,8 @@ public sealed class HandlerTests
         Assert.Equal(first.Anchor, compact.RootElement.GetProperty("nodes").EnumerateArray().Single(n => n.GetProperty("id").GetString() == first.Id).GetProperty("anchor").GetString());
         var legacy = graph with { Nodes = graph.Nodes.Select(n => n with { Anchor = null }).ToList() };
         var json = GraphJson.Serialize(legacy);
-        Assert.DoesNotContain("\"anchor\"", json);
+        using var legacyDocument = JsonDocument.Parse(json);
+        Assert.All(legacyDocument.RootElement.GetProperty("nodes").EnumerateArray(), n => Assert.False(n.TryGetProperty("anchor", out _)));
         Assert.All(GraphJson.Deserialize(json)!.Nodes, n => Assert.Null(n.Anchor));
         Assert.Contains(first.Id, GraphDiff.Compare(graph, legacy, new() { IgnorePositions = true }).Nodes.Changed);
     }

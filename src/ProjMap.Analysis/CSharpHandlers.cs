@@ -7,6 +7,39 @@ namespace ProjMap.Analysis;
 
 internal sealed partial class CSharpScanner
 {
+    private static EntryPointInfo HandlerEntry(ExpressionSyntax callback, string id, string anchor, SemanticModel model, CancellationToken ct)
+    {
+        var site = HandlerConstruction(callback);
+        var registration = callback.Parent is AssignmentExpressionSyntax assignment ? assignment : site ?? callback;
+        var list = site switch { InvocationExpressionSyntax i => i.ArgumentList, BaseObjectCreationExpressionSyntax o => o.ArgumentList, _ => null };
+        var method = site == null ? null : Resolved(site, model, ct) as IMethodSymbol;
+        ExpressionSyntax? caption = null;
+        if (list != null)
+        {
+            var preceding = list.Arguments.TakeWhile(a => a.Expression != callback).ToArray();
+            // Prefer parameter semantics. Legacy unbound helpers conventionally pass name, then caption.
+            caption = preceding.FirstOrDefault(a => (a.NameColon?.Name.Identifier.ValueText ??
+                method?.Parameters.ElementAtOrDefault(list.Arguments.IndexOf(a))?.Name) is "text" or "label" or "caption" or "content")?.Expression;
+            caption ??= preceding.Where(a => (a.NameColon?.Name.Identifier.ValueText ??
+                    method?.Parameters.ElementAtOrDefault(list.Arguments.IndexOf(a))?.Name) is not ("name" or "control" or "controlName" or "sliderName"))
+                .Select(a => a.Expression).Where(e => e is LiteralExpressionSyntax l && l.IsKind(SyntaxKind.StringLiteralExpression)
+                || e is InterpolatedStringExpressionSyntax || model.GetTypeInfo(e, ct).Type?.SpecialType == SpecialType.System_String).LastOrDefault();
+        }
+        var literal = caption is LiteralExpressionSyntax l2 && l2.IsKind(SyntaxKind.StringLiteralExpression);
+        return new()
+        {
+            Id = "entry:" + id, Path = callback.SyntaxTree.FilePath, Line = Line(registration),
+            EndLine = registration.GetLocation().GetLineSpan().EndLinePosition.Line + 1,
+            Anchor = anchor, ControlName = HandlerAnchor(callback, "", model, ct),
+            Label = literal ? ((LiteralExpressionSyntax)caption!).Token.ValueText : caption?.ToString(),
+            LabelLine = caption == null ? null : Line(caption),
+            LabelKind = caption == null ? null : literal ? "literal" : "expression",
+            Event = callback.Parent is AssignmentExpressionSyntax { Left: MemberAccessExpressionSyntax eventAccess } ? eventAccess.Name.Identifier.ValueText : null,
+            Detection = callback.Parent is AssignmentExpressionSyntax ? "csharp-event" : "csharp-delegate-argument",
+            HandlerIds = [id]
+        };
+    }
+
     private static ISymbol? Resolved(SyntaxNode site, SemanticModel model, CancellationToken ct)
     {
         var info = model.GetSymbolInfo(site, ct);
@@ -215,6 +248,9 @@ internal sealed partial class CSharpScanner
     {
         if (expression is BaseObjectCreationExpressionSyntax) return true;
         if (expression is not InvocationExpressionSyntax invocation) return false;
+        // A field initializer can live in another partial file of this compilation.
+        if (SourceModel(expression.SyntaxTree, model) is not { } expressionModel) return false;
+        model = expressionModel;
         var method = Resolved(invocation, model, ct) as IMethodSymbol;
         // An arbitrary GetControl() may return an existing/attached control. Require a source
         // factory with a fresh allocation; no guess for opaque library factories or recursion.
@@ -224,7 +260,9 @@ internal sealed partial class CSharpScanner
             .Concat(syntax is MethodDeclarationSyntax { ExpressionBody: { } arrow } ? [arrow.Expression] : []);
         var values = returns.OfType<ExpressionSyntax>().ToArray();
         if (values.Length == 0) return false;
-        var factoryModel = model.Compilation.GetSemanticModel(syntax.SyntaxTree);
+        // CompilationReference symbols retain syntax references from the referenced project.
+        // Requesting that tree from the caller compilation throws and aborts edge publication.
+        if (SourceModel(syntax.SyntaxTree, model) is not { } factoryModel) return false;
         return values.All(value => Fresh(value, factoryModel, 0));
 
         bool Fresh(ExpressionSyntax value, SemanticModel current, int depth)
@@ -252,5 +290,20 @@ internal sealed partial class CSharpScanner
             return returns.Length > 0 && returns.All(r => r is IdentifierNameSyntax name && name.Identifier.ValueText == extension.Parameters[0].Name)
                 && Fresh(fluent.Expression, current, depth + 1);
         }
+    }
+
+    private static SemanticModel? SourceModel(SyntaxTree tree, SemanticModel current)
+    {
+        if (tree == current.SyntaxTree) return current;
+        var pending = new Stack<Compilation>();
+        var visited = new HashSet<Compilation>();
+        pending.Push(current.Compilation);
+        while (pending.TryPop(out var compilation))
+        {
+            if (!visited.Add(compilation)) continue;
+            if (compilation.ContainsSyntaxTree(tree)) return compilation.GetSemanticModel(tree, ignoreAccessibility: true);
+            foreach (var reference in compilation.References.OfType<CompilationReference>()) pending.Push(reference.Compilation);
+        }
+        return null; // No source owner: leave the visibility heuristic undecided.
     }
 }

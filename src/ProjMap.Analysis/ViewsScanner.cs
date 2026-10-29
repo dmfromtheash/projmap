@@ -7,7 +7,7 @@ namespace ProjMap.Analysis;
 /// <summary>
 /// Builds the `views` section: a tier for every source file (rules `builtin:tiers-v1`, then `.projmap/views.rules.json`,
 /// then the owner's corrections) and features — name groups that cut across tiers, with the handlers that start them.
-/// Runs last and only reads the graph and file texts, so a full and an incremental scan give the same result.
+/// Runs before explanations and only reads the graph and file texts, so full and incremental scans agree.
 ///
 /// Scoring (explainable, not a probability): evidence is grouped by family; inside a family only the strongest item
 /// counts; families combine as 1 − Π(1 − s). Only weak families (path, module, framework) cap the result at 0.69.
@@ -122,6 +122,7 @@ internal sealed class ViewsScanner : IRepositoryScanner
     public Task ScanAsync(ScanContext c, CancellationToken ct)
     {
         var (rules, fileOverrides) = ReadRulesFile(c);
+        c.ProjectViewOverrides = fileOverrides;
         var stale = new List<string>();
         var assignments = new Dictionary<string, TierAssignment>(StringComparer.Ordinal);
         var moduleSignals = ModuleSignals(c);
@@ -160,6 +161,8 @@ internal sealed class ViewsScanner : IRepositoryScanner
             Memberships = memberships.OrderBy(m => m.FeatureId, StringComparer.Ordinal).ThenBy(m => m.NodeId, StringComparer.Ordinal).ToList(),
             StaleOverrides = stale.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList(),
             Timeline = Timeline(c, ct),
+            EntryPoints = c.EntryPoints.Count == 0 ? null : c.EntryPoints.OrderBy(e => e.Id, StringComparer.Ordinal)
+                .Select(e => e with { Ambiguous = e.Anchor != null && c.EntryPoints.Count(other => other.Anchor == e.Anchor) > 1 }).ToList(),
         };
         return Task.CompletedTask;
     }

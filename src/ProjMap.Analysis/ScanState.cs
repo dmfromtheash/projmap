@@ -47,6 +47,8 @@ internal sealed record StageOutput(List<Node> Nodes, List<Edge> Edges, List<Road
             "imports" => n.Language is "TypeScript" or "JavaScript" or "Python" && n.Kind is NodeKinds.Type or NodeKinds.Member,
             "roadmap" => n.Kind == NodeKinds.Doc || n.Id is "group:docs" or "group:roadmap",
             "database" => n.Kind == NodeKinds.Table || n.Id == "group:database",
+            // Capture the full immutable node, including SummarySource. Explanations/entries are
+            // assembled after cached stages and must never be replayed from a previous views result.
             "descriptions" => n.Kind is NodeKinds.Module or NodeKinds.Folder && n.Summary != null,
             _ => false
         }).ToList(),

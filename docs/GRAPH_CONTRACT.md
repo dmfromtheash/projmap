@@ -42,9 +42,26 @@ Partial types have one canonical node: the first declaration by ordinal file
 path and source span. Members in all partial files point to that node. This
 means a type's `Path` can differ from a member's `Path`.
 
+Optional `declarations` lists `{path, line, endLine, summary?, summaryLine?}`
+for every C# type declaration, in ordinal path/line order, and for emitted
+members/handlers where available. Ranges are inclusive, 1-based. The canonical
+type's parent/path/line remain unchanged; open a member using its own path,
+never by walking to the canonical type's file. Comments belong to individual
+declarations. Legacy `summary` remains Roslyn's symbol summary (which may combine
+partial documentation); explanations use declaration-local summaries instead.
+`summaryLine` locates the XML summary, not the first line of the declaration.
+Types' ranges are rebuilt from current per-file results on incremental scans,
+including body edits in a noncanonical partial file. Missing declarations mean
+unavailable metadata, not proof that the node has no source.
+
+Optional `summarySource` is `{path,line,snippet?}` for module/folder summaries
+found in Markdown. It identifies the exact matched document line. Archives are
+not used by DescriptionScanner; a summary is an author's assertion, not verified
+current behavior. Explanation sources also retain a content hash for these texts.
+
 `SubKind` for C# types is `class`, `record`, `record struct`, `struct`,
 `interface`, `enum`, or `delegate`; members are `method`, `property`, `ctor`,
-`event` or non-private `field` (operators/destructors are methods). Private
+`event`, non-private `field`, or synthetic `handler` (operators/destructors are methods). Private
 fields are not emitted. Field and field-like event complexity is zero. TS
 subkinds are `class`, `interface`, `type`, `enum`, and `function`; Python uses
 `class` and `function`. Lightweight exported variable declarations are treated
@@ -99,23 +116,35 @@ git evidence lists up to five recent co-commits.
 | --- | --- | --- |
 | `projectRef` | module → referenced module | distinct manifest dependency declarations (normally 1) |
 | `package` | module → `pkg:Name` | distinct package declarations per module (normally 1) |
-| `reference` | type → type **and** file → file | bound simple-name occurrences referencing repository types or their symbols |
-| `call` | type → type **and** file → file | bound invocations and explicit/implicit constructor calls |
-| `inherit` | type → base type **and** file → file | base declarations; interface → interface also inherits |
-| `implement` | type → interface **and** file → file | class/record/struct base-list interface declarations |
+| `reference` | finest available member/handler/type/file → member/type | bound simple-name occurrences; also builder/enclosing handler → registered handler |
+| `call` | finest available member/handler/type/file → member/type | bound invocations and explicit/implicit constructor calls |
+| `inherit` | type → base type; overriding member → overridden member | base declarations; interface → interface also inherits |
+| `implement` | type → interface; implementing member → interface member | base-list interfaces and resolved member implementations |
 | `import` | file → file | resolved JS/TS/Python import/re-export occurrences |
 | `cochange` | file ↔ file | commits touching both files in the requested git window |
 | `mentions` | roadmap item/doc → mentioned code/file/module | unique explicit linked targets per item/doc, plus decision commit-file matches |
 | `dbRead` | file/type → table | SQL `FROM`/`JOIN` occurrences in a file containing `SELECT` |
 | `dbWrite` | file/type → table | SQL `INSERT INTO`, `INSERT OR ... INTO`, `REPLACE INTO`, `UPDATE`, `DELETE FROM` occurrences |
 
-Type and file semantic edges are deliberate parallel representations. The file
-edge accumulates all contributing semantic occurrences, including sources in
-partial-type files. Consumers rolling up file edges must **not also add type
-edges** or they double count. References and calls are separate measures: a
-method name may contribute both a reference and a call. No dependencies are
-inferred from unresolved NuGet symbols or generated framework types. Modules
-with missing packages still retain their declaration nodes.
+C# emits each observation at the **finest available level**, without parallel
+file/type copies. A method/property/field or nested synthetic handler is the
+source when emitted; otherwise it falls back to the containing type, or the file
+for top-level code. A mapped target member is preferred to its containing type.
+With members disabled, type/file fallbacks remain. Handler registration uses
+`reference`, and does not mean the callback was executed. Calls inside a handler
+belong to that handler. Inherit/implement member edges point from the
+implementation to the contract, not in the reverse direction.
+
+Roll up original edges once, resolving endpoint files from each node's actual
+`path` (especially partial members), with containment only as a fallback.
+Old graphs are not guaranteed to use the same edge granularity; inspect their
+edges rather than assuming parallel representations or synthesizing duplicates.
+The DB scanner separately emits file/type forms; these must not be double-counted.
+Call target simple names are excluded from the simple-name reference pass;
+references in arguments/receivers remain independent observations. No dependencies
+are inferred for unresolved packages without repository endpoints. Missing
+packages do not remove declarations. Semantic evidence is capped at three
+locations; git co-change evidence is capped at five.
 
 Co-change is undirected and stored once, with ordinal-smaller path first.
 Commits touching more than 40 paths are excluded from pair counts, but count
@@ -151,7 +180,7 @@ normal edge id, evidence, aggregation and strength rules:
 synthetic code-created handler nodes. Its target keeps subkind `method` and gains
 tags `callback` and `xaml-handler`. Evidence includes the element local type,
 `x:Name`/`Name` when present, the attribute text and its 1-based line. No control
-nodes or general-purpose metadata fields are added.
+nodes are added; resolved registrations also appear in optional `views.entryPoints`.
 
 Events require a bounded, ordinal, case-sensitive known-name list (for example
 `Click`, `Tapped`, `PointerPressed`, `Loaded`, `KeyDown`, `SelectionChanged`) and
@@ -324,6 +353,146 @@ corrections: `addedFeatures` (terms and/or globs), `featureMerges`,
 matches nothing is listed in `staleOverrides` and never re-targeted silently.
 `ruleSet` records what contributed: `builtin:tiers-v1[+.projmap/views.rules.json][+owner]`.
 `projmap-cli diff` compares views as its own section.
+
+**Timeline.** Optional `views.timeline` has `coverage`, `files` (file node ids),
+`commits` (`id`, `at`, `subject`, `files` indexes into that file array), and
+`stages` (`key`, `title`, `status`, `commitIds`, `link`). Commits are newest
+first; `at` uses the git committer timestamp. A stage link is `explicit` when a
+document line names that one stage and a commit hash, otherwise `subject` when
+its key occurs in a commit subject, otherwise `none`. Explicit links take
+precedence. Only today's tracked/scanned paths are represented, within the scan's
+history limits; this is file activity, not a historical snapshot or evidence of
+every member's behavior. Timeline is absent when no commits are available.
+
+## Explanations and provenance (optional views extensions)
+
+Graph schema remains 1. `views.explanations` has its own `schemaVersion: 1`,
+`language: "ru"`, `ruleSet: "builtin:explanations-v1"`, `nodes`, `sources`,
+and `nameIndex`. ExplanationScanner runs **after views** on every scan; overrides
+and current content hashes are read again even when source-analysis results are
+reused. Modules, folders, files, types and members (including handlers) get
+profiles. Synthetic groups, table/doc aliases and roadmap entries do not.
+Original node names, ids, summaries and containment are never renamed.
+
+A node profile contains `nodeId`, `displayName`, `description`, and optional
+additional `claims` (omitted when empty). Every text is an independent claim:
+
+```json
+{
+  "nodeId": "type:module:Demo.csproj:Demo.SceneRenderer",
+  "displayName": {"text":"Отрисовка · Сцена","confidence":"guessed","sourceIds":[0,1]},
+  "description": {"text":"Именованный блок кода объединяет связанные данные и действия.","confidence":"derived","sourceIds":[2]},
+  "claims": [{"text":"В комментарии автора: Draws a scene.","confidence":"known","sourceIds":[3]}]
+}
+```
+
+Confidence is `known` for quoted author comments, Markdown assertions, literal
+labels or explicit owner corrections; `derived` for declarations, registration,
+structural classification and file activity; `guessed` for name translations,
+weak tier assignments and candidate feature membership. It is never one rating
+for the whole node. `known` means the text was found, not that its asserted
+behavior was executed or validated. Guessed purpose descriptions explicitly say
+«Предположительно по имени». Unrecognized words/abbreviations remain unchanged.
+No RP/XYZ expansion is invented. There is no automatic translation of arbitrary
+English prose: retain it as a separate known author claim, with a Russian
+structural explanation. Properties, fields, constructors, events, interfaces and
+enums get distinct structural templates. The TS/JS `function` fallback explicitly
+warns that exported data can have that subkind and local callbacks are unparsed.
+
+`sourceIds` are zero-based indexes into the shared `sources` array, local to
+this explanations section. A source has `kind` and optional `path`, `line`,
+`endLine`, `sourceHash`, `commitId`, `ruleId`, `reference`, `text` (nulls omitted).
+All source paths are repository-relative and lines 1-based. Kinds:
+
+- `comment`: declaration-local summary text, exact summary location and SHA-256
+  of the UTF-8 decoded full source text (same hashing as incremental ScanState).
+- `markdown`: exact matched document line/snippet and its content hash.
+- `handlerLabel`: registration location/hash and `reference` to the entry id;
+  inspect that entry's `labelKind` before treating text as a literal.
+- `dictionary`: versioned word rule (`name:<word>`) or `unknown-name` fallback.
+- `ownerDictionary`: scoped translation, with `reference` = `owner` or the
+  project rules path; its application to code purpose remains a guess.
+- `declaration`: `reference: "self"` resolves to the profile's original graph
+  node and its `path`, `line`, `declarations`; shared across profiles, not an
+  independent global location.
+- `tier`: `reference` = file node id in `views.assignments`; the complete
+  original evidence remains there, with the rule/reason also given here.
+- `feature`: `reference` = feature id; consult `views.memberships` for this
+  profile's membership evidence. A manually renamed group does not by itself
+  confirm an automatic membership.
+- `git`: commit hash/subject, shared across files; `reference: "views.timeline"`.
+  Used only for file activity within the existing history window, never to
+  explain the current behavior of each method.
+- `owner`: exact correction text, selector in `ruleId`, origin in `reference`.
+
+All referenced sources are transmitted; indexes are deterministic for identical
+scan input but are not persistent ids across scans. Comments from all partial
+declarations are retained without selecting a universal purpose from whichever
+declaration comes first. A file only borrows a declaration's comment as a
+labelled claim when the filename matches that declaration's exact name or a
+`Name.Part` form; it never takes the first helper type's summary as file purpose.
+
+`nameIndex` maps case-folded original/Russian names, identifier words, paths and
+labels to arrays of **profile indexes into explanations.nodes**. It is complete,
+independent of drawing limits, and may return multiple nodes. It is not a new
+identity map. Names can be used for substring search; use node ids for selection.
+
+**Entry registrations.** Optional `views.entryPoints` entries have `id`, `path`,
+`line`, optional `endLine`, `anchor`, `controlName`, `label`, `labelLine`, `labelKind`
+(`literal | expression`), `event`, `detection`, `handlerIds`, and `ambiguous`
+(omitted when false). C# entries use `entry:<handler-id>` and detection
+`csharp-delegate-argument` or `csharp-event`; XAML entries use a path/line/event/
+target id and `xaml-attribute`. Factory parameter names distinguish technical
+control names from captions; unresolved factories use the last preceding string
+as a bounded convention. Dynamic labels remain source expressions. XAML takes
+Content/Text/Header as its caption and stores the event/Command registration.
+`labelLine`, when available, opens the caption itself when it is on another line
+than the registration; the handlerLabel explanation source uses that line.
+Only already resolved XAML registrations are included. C# entries sharing an
+anchor are ambiguous; none is silently selected. Entry ids can change with
+line/handler ordinals; stable corrections use an unambiguous C# anchor.
+This metadata is source observation, not proof of UI visibility/reachability.
+
+**Owner explanations.** Existing `ViewsOverrides` now also accepts
+`explanations: [{nodeId?, anchor?, displayName?, description?}]` and
+`explanationWords: {"XYZ":"project-specific wording"}`. The existing AppStore
+load/save and CLI `--views-overrides` persist the same extended record, under
+`views/<root-hash>.json`; no scanned repository is written. Project corrections
+precede owner corrections; later entries win. Ordinary nodes use exact ids.
+Synthetic C# handlers require an anchor resolving to exactly one node; a
+handler's ordinal id alone is rejected as stale, as are missing/ambiguous
+selectors. When an anchor is present it takes precedence over nodeId, allowing
+the ordinal to change. Stale corrections appear in `views.staleOverrides` with
+`explanation:` prefix. Corrections rename only explanation texts and keep
+automatic evidence; they do not upgrade other claims' confidence.
+`projmap-cli diff` includes explanation texts, markers and meaningful provenance;
+`--ignore-git` omits git claims, and `--ignore-positions` omits declaration/source
+positions. Whole-file hashes are not diff keys, since an unrelated line edit can
+change them without changing a claim.
+
+**Serialization.** `Serialize`, streamed `WriteAsync` and `SerializeCompact`
+retain all metadata. Plain and streamed explanations use the object shape above.
+Compact graphs additionally use `views.explanations.compact: 1`, a shared
+`texts` string array, and tuple profiles:
+
+```text
+nodes: [ [graphNodeIndexOrId, displayClaim, descriptionClaim, extraClaims?], … ]
+claim: [textIndex, confidenceIndex, sourceIds]
+confidenceIndex: 0 = known, 1 = derived, 2 = guessed
+sources: [ [kindTextIndex, pathTextIndex?, line?, endLine?, sourceHashTextIndex?,
+            commitIdTextIndex?, ruleIdTextIndex?, referenceTextIndex?, textIndex?], … ]
+```
+
+Source tuples omit trailing null slots (internal null slots remain); all text
+indexes refer to the same `texts` array, sharing repeated paths/hashes/words.
+`nameIndex` retains its object shape. Source and profile indexes retain their
+ordinary domains. Empty extra claims are omitted. Repeated descriptions occur once. This is
+separate from compact graph edge tuples; neither source nor search indexes are
+graph node indexes. `GraphJson.Deserialize` reads old/plain/compact graphs and
+expands both tuple formats, recalculating compact edge strengths from weights.
+Absent extensions stay null; consumers can provide neutral old-graph fallbacks.
+Coverage DTOs, edge explanation profiles, new TS/React/Prisma analysis, navigation,
+and later timeline/problem refinements are outside novice steps 1–3.
 
 ## Problems (optional `problems` section and `report` command)
 
