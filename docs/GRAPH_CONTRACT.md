@@ -20,7 +20,7 @@ namespace, symbol signature or roadmap title can change its identity.
 | `folder` | `folder:<manifest-path>:<directory-path>` inside modules; `folder:<directory-path>` outside | nearest folder, module or system |
 | `file` | `file:<relative-path>` | folder, module or system |
 | C# `type` | `type:<module-id>:<fully-qualified-original-type-name>` | containing type, otherwise declaring file |
-| C# `member` | `member:<module-id>:<Roslyn-documentation-comment-id>` | declaring type |
+| C# `member` | `member:<module-id>:<source-signature>` | declaring type |
 | TS/JS/Python `type` | `type:<file-path>:<exported-name>` | file |
 | TS/JS/Python `member` | `member:<file-path>:<exported-name>` | file |
 | `doc` | `doc:<markdown-path>` | `group:docs` |
@@ -36,8 +36,20 @@ first one: this analyzer does not evaluate MSBuild `Compile` item expressions.
 Loose C# source uses `system:root` as its identity scope.
 
 C# fully qualified names omit `global::` and retain generic type parameters.
-Documentation comment ids distinguish overloads, constructors, properties and
-operators. A fallback fully qualified signature is used if Roslyn has no doc id.
+Member source signatures use `M:`, `P:`, `E:` or `F:`, the original containing
+type name, and the declared member name. Constructors use `#ctor`/`#cctor`,
+generic methods append their arity as `` ``N ``, and operators use their metadata
+name (conversions also append `~<written-return-type>`). Nonempty parameter lists
+contain the written type syntax; by-reference parameters append `@`. Trivia and
+`global::` are removed, built-in keywords normalize to their fixed CLR names
+(`int` → `System.Int32`), and generic arguments, nullable markers, array ranks,
+tuples and pointers retain their syntax. Written namespace qualifications and
+using/extern alias names are retained, avoiding collisions between overloads such
+as `Run(A.Context)` and `Run(B.Context)`. Changing an alias or type spelling can
+change an id; restoring/building packages cannot. Bound references use the same
+original source declaration, including cross-project and constructed generic
+references. These ids replace the old resolution-dependent documentation ids;
+old graph files remain readable without migration (schemaVersion stays 1).
 Partial types have one canonical node: the first declaration by ordinal file
 path and source span. Members in all partial files point to that node. This
 means a type's `Path` can differ from a member's `Path`.
@@ -118,6 +130,7 @@ git evidence lists up to five recent co-commits.
 | `package` | module → `pkg:Name` | distinct package declarations per module (normally 1) |
 | `reference` | finest available member/handler/type/file → member/type | bound simple-name occurrences; also builder/enclosing handler → registered handler |
 | `call` | finest available member/handler/type/file → member/type | bound invocations and explicit/implicit constructor calls |
+| `dispatch` | interface/base member → possible implementation/override member | resolved implementation/override declarations (normally 1) |
 | `inherit` | type → base type; overriding member → overridden member | base declarations; interface → interface also inherits |
 | `implement` | type → interface; implementing member → interface member | base-list interfaces and resolved member implementations |
 | `import` | file → file | resolved JS/TS/Python import/re-export occurrences |
@@ -133,7 +146,12 @@ for top-level code. A mapped target member is preferred to its containing type.
 With members disabled, type/file fallbacks remain. Handler registration uses
 `reference`, and does not mean the callback was executed. Calls inside a handler
 belong to that handler. Inherit/implement member edges point from the
-implementation to the contract, not in the reverse direction.
+implementation to the contract. An additional `dispatch` edge points from that
+contract to each scanned implementation/override (including explicit interface
+implementations, inherited implementations, properties, indexers and events). Dispatch denotes a possible
+indirect runtime target, not an observed call; a virtual override chain can be
+followed transitively. No external library endpoint is invented. The viewer lists
+dispatch as “возможная реализация” and includes it in code-relation filters.
 
 Roll up original edges once, resolving endpoint files from each node's actual
 `path` (especially partial members), with containment only as a fallback.
@@ -247,9 +265,15 @@ delegate variables, lambdas) also cover factories with computed string arguments
 target-typed `new(...)`, timer constructors/helpers and `AddHandler(...Event, ...)`.
 This is a bounded source heuristic, not proof of runtime UI reachability. Its `Name`
 is the call plus the control's text («TextButton «Up · Наверх»»), and its parent
-is the declaring type. Its id remains the containing member's id + `#h<n>`:
-legacy lambda forms keep source order; newly supported forms are appended in
-source order, so adding support does not renumber legacy handlers.
+is the declaring type. Its id is the containing member's id plus
+`#h:<event|argument>:<registration-target>:<ordinal>`. The target is the written
+event expression or factory/constructor expression with preceding arguments,
+normalized without trivia/global qualification; preceding lambdas use the fixed
+placeholder `callback`. Only registrations with the same kind and full target
+share an ordinal (starting at 1); unrelated handlers, file ordering,
+line shifts and callback body edits do not renumber it. Identical registrations
+remain distinguished by occurrence order. Targets are not truncated in ids.
+Legacy `#h<n>` graphs remain readable; no reader parses either suffix format.
 
 Handler metadata (all optional, graph schema remains 1):
 

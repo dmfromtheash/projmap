@@ -119,7 +119,8 @@ public sealed class ProblemsTests
             """);
         var graph = await ProjectScanner.ScanAsync(new(repo.Root) { GitMonths = 0 });
         var implementation = Assert.Single(graph.Nodes, n => n.Id.EndsWith(":M:Demo.Task.Run", StringComparison.Ordinal));
-        Assert.DoesNotContain(graph.Edges, e => e.Target == implementation.Id); // only the contract is called
+        Assert.DoesNotContain(graph.Edges, e => e.Kind == EdgeKinds.Call && e.Target == implementation.Id);
+        Assert.Contains(graph.Edges, e => e.Kind == EdgeKinds.Dispatch && e.Target == implementation.Id);
         Assert.DoesNotContain(Of(graph.Problems!, ProblemKinds.DeadCode), p => p.NodeIds.Contains(implementation.Id));
         Assert.DoesNotContain(Of(graph.Problems!, ProblemKinds.DeadCode), p => p.NodeIds.Contains("type:module:Core.csproj:Demo.Task"));
     }

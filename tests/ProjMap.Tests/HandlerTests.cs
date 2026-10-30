@@ -224,7 +224,7 @@ public sealed class HandlerTests
     }
 
     [Fact]
-    public async Task MethodGroupsDelegateArgumentsAndTargetTypedActionsKeepLegacyIds()
+    public async Task MethodGroupsDelegateArgumentsAndTargetTypedActionsHaveTargetBasedIds()
     {
         using var repo = Repository("""
             public record SearchAction(string Title, System.Action Open);
@@ -241,8 +241,8 @@ public sealed class HandlerTests
             """);
         var graph = await Scan(repo);
         var old = Handler(graph, "TextButton «OldButton · Old»");
-        Assert.EndsWith("#h1", old.Id);
-        Assert.EndsWith("#h2", Handler(graph, "old.Click").Id);
+        Assert.EndsWith("#h:argument:Ui.TextButton(\"OldButton\",\"Old\"):1", old.Id);
+        Assert.EndsWith("#h:event:old.Click:1", Handler(graph, "old.Click").Id);
         Assert.Equal(5, graph.Nodes.Count(n => n.SubKind == "handler"));
         var undo = Handler(graph, "TextButton «UndoButton · Undo»");
         Assert.Contains(graph.Edges, e => e.Source == undo.Id && e.Target.EndsWith(":M:Panel.Undo"));
@@ -270,7 +270,7 @@ public sealed class HandlerTests
             .Replace("TempButton", "SecondButton").Replace("\"First\"", "\"Temp\"").Replace("\"Second\"", "\"First\"").Replace("\"Temp\"", "\"Second\""));
         var reordered = Handler(await Scan(repo), "TextButton «FirstButton · First»");
         Assert.Equal(first.Anchor, reordered.Anchor);
-        Assert.NotEqual(first.Id, reordered.Id);
+        Assert.Equal(first.Id, reordered.Id);
         Assert.All(graph.Nodes.Where(n => n.SubKind != "handler"), n => Assert.Null(n.Anchor));
         Assert.Equal(first.Anchor, Handler(GraphJson.Deserialize(GraphJson.Serialize(graph))!, first.Name).Anchor);
         using var stream = new MemoryStream();

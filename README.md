@@ -39,7 +39,10 @@ projmap-cli stats <graph.json>
 projmap-cli diff <a.json> <b.json> [--ignore-git] [--ignore-positions]
 ```
 
-Формат `graph.json` — `docs/GRAPH_CONTRACT.md`.
+Формат `graph.json` — `docs/GRAPH_CONTRACT.md`. ID членов C# строятся по исходному
+синтаксису и не зависят от сборки проекта; ID обработчиков учитывают цель регистрации.
+Рёбра `dispatch` показывают возможные реализации интерфейсных и виртуальных членов.
+Старые графы остаются читаемыми, `schemaVersion` — 1.
 
 ## Сборка из исходников
 

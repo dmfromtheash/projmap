@@ -2,12 +2,12 @@
 'use strict';
 
 const EDGE_CAT = {
-  projectRef: 'code', reference: 'code', call: 'code', inherit: 'code', implement: 'code', import: 'code',
+  projectRef: 'code', reference: 'code', call: 'code', dispatch: 'code', inherit: 'code', implement: 'code', import: 'code',
   cochange: 'cochange', dbRead: 'db', dbWrite: 'db', mentions: 'plan', package: 'package',
 };
 const EDGE_RU = {
   projectRef: 'зависит', reference: 'использует', call: 'использует', inherit: 'построен на',
-  implement: 'построен на', import: 'подключает', cochange: 'меняются вместе', dbRead: 'читает из базы',
+  implement: 'построен на', dispatch: 'возможная реализация', import: 'подключает', cochange: 'меняются вместе', dbRead: 'читает из базы',
   dbWrite: 'записывает в базу', mentions: 'упоминается', package: 'внешняя библиотека',
 };
 const KIND_RU = {

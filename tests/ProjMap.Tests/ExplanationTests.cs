@@ -251,7 +251,7 @@ public sealed class ExplanationTests
     }
 
     [Fact]
-    public async Task HandlerLabelsHaveLiteralSourcesAndAnchoredCorrectionsSurviveOrdinalChanges()
+    public async Task HandlerLabelsHaveLiteralSourcesAndAnchoredCorrectionsSurviveReordering()
     {
         using var repo = new FixtureRepository(); Buttons(repo);
         var first = await Scan(repo);
@@ -266,7 +266,7 @@ public sealed class ExplanationTests
         Buttons(repo, reverse: true);
         var second = await Scan(repo, overrides);
         var reordered = Assert.Single(second.Nodes, n => n.SubKind == "handler" && n.Anchor == handler.Anchor);
-        Assert.NotEqual(handler.Id, reordered.Id);
+        Assert.Equal(handler.Id, reordered.Id);
         Assert.Equal("Экспорт картинок", Profile(second, reordered.Id).DisplayName.Text);
         Assert.Equal("known", Profile(second, reordered.Id).DisplayName.Confidence);
         Assert.Empty(second.Views!.StaleOverrides);

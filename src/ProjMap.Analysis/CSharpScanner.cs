@@ -377,7 +377,7 @@ internal sealed partial class CSharpScanner : IRepositoryScanner
             if (symbol?.ContainingType == null) continue;
             var parent = "type:" + u.Module.Id + ":" + Fqn(symbol.ContainingType);
             if (!c.Graph.Nodes.ContainsKey(parent)) continue;
-            var signature = symbol.GetDocumentationCommentId() ?? symbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+            var signature = MemberSignature(symbol)!;
             var subkind = declaration is ConstructorDeclarationSyntax ? "ctor" : symbol is IPropertySymbol ? "property" : symbol is IEventSymbol ? "event" : "method";
             // Overrides and interface implementations of library members (Avalonia's OnPointerPressed, IDisposable.Dispose …)
             // are called by the library, not by repository code: they have no incoming edge yet are live.
@@ -425,7 +425,7 @@ internal sealed partial class CSharpScanner : IRepositoryScanner
             if (symbol?.ContainingType == null || symbol.DeclaredAccessibility == Accessibility.Private) continue;
             var parent = "type:" + u.Module.Id + ":" + Fqn(symbol.ContainingType);
             if (!c.Graph.Nodes.ContainsKey(parent)) continue;
-            var signature = symbol.GetDocumentationCommentId() ?? symbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+            var signature = MemberSignature(symbol)!;
             // Fields of a [StructLayout] struct mirror a native layout: Windows fills them, code may never read them all.
             var native = symbol.ContainingType.GetAttributes().Any(a => a.AttributeClass?.Name == "StructLayoutAttribute");
             Add(new Node
@@ -448,10 +448,31 @@ internal sealed partial class CSharpScanner : IRepositoryScanner
     // A UI handler is a lambda wired to a control: `Ui.TextButton("Up", "Наверх", () => …)` (an argument of a call that
     // also passes a string literal — the control's name or text) or `button.Click += (_, _) => …`. Each becomes its own
     // node, so "which button runs what" is visible instead of everything belonging to the method that builds the panel.
-    // Ids: the containing member's id + "#h<n>" in source order, stable while that member's handlers keep their order.
+    // Ids use the containing member, registration kind/target, and an ordinal among identical targets only.
     internal static List<(ExpressionSyntax Lambda, string Id, string Label)> Handlers(SyntaxNode declaration, string memberId, SemanticModel model, CancellationToken ct)
     {
         var result = new List<(ExpressionSyntax, string, string)>();
+        var siblings = new Dictionary<string, int>(StringComparer.Ordinal);
+        void Add(ExpressionSyntax callback, string label)
+        {
+            label = Regex.Replace(label, @"\s+", " ");
+            var key = callback.Parent switch
+            {
+                AssignmentExpressionSyntax assignment => "event:" + SignatureText(assignment.Left),
+                ArgumentSyntax { Parent: ArgumentListSyntax list } arg => "argument:" + (list.Parent switch
+                {
+                    InvocationExpressionSyntax call => SignatureText(call.Expression),
+                    ObjectCreationExpressionSyntax creation => "new " + SignatureText(creation.Type),
+                    _ => "new",
+                }) + "(" + string.Join(',', list.Arguments.TakeWhile(a => a != arg).Select(a =>
+                    a.Expression is AnonymousFunctionExpressionSyntax ? "callback" : SignatureText(a.Expression))) + ")",
+                _ => "argument:" + label,
+            };
+            var ordinal = siblings.GetValueOrDefault(key) + 1;
+            siblings[key] = ordinal;
+            result.Add((callback, memberId + "#h:" + key + ":" + ordinal.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                label.Length > 80 ? label[..80] + "…" : label));
+        }
         foreach (var lambda in declaration.DescendantNodes().OfType<AnonymousFunctionExpressionSyntax>())
         {
             string? label = lambda.Parent switch
@@ -467,11 +488,9 @@ internal sealed partial class CSharpScanner : IRepositoryScanner
                 _ => null,
             };
             if (label == null) continue;
-            label = Regex.Replace(label, @"\s+", " ");
-            result.Add((lambda, memberId + "#h" + (result.Count + 1).ToString(System.Globalization.CultureInfo.InvariantCulture),
-                label.Length > 80 ? label[..80] + "…" : label));
+            Add(lambda, label);
         }
-        // Append newly supported forms, preserving every legacy #h<n> even if a new form occurs earlier.
+        // Method groups and delegate-valued arguments use the same identity scheme as lambdas.
         var known = result.Select(x => x.Item1).ToHashSet();
         foreach (var expression in declaration.DescendantNodes().OfType<ExpressionSyntax>())
         {
@@ -479,21 +498,38 @@ internal sealed partial class CSharpScanner : IRepositoryScanner
             if (expression.Parent is not ArgumentSyntax { Parent: ArgumentListSyntax list } arg) continue;
             if (list.Parent is not (InvocationExpressionSyntax or BaseObjectCreationExpressionSyntax)) continue;
             var before = list.Arguments.TakeWhile(a => a != arg).Select(a => a.Expression).ToArray();
-            var method = Resolved(list.Parent!, model, ct) as IMethodSymbol;
-            var timer = method?.ContainingType.Name.EndsWith("Timer", StringComparison.Ordinal) == true;
-            var routedEvent = method?.Name == "AddHandler" && before.Any(e => e.ToString().EndsWith("Event", StringComparison.Ordinal));
-            if (!timer && !routedEvent && !before.Any(e => IsText(e) || model.GetTypeInfo(e, ct).Type?.SpecialType == SpecialType.System_String)) continue;
-            if (model.GetTypeInfo(expression, ct).ConvertedType?.TypeKind != TypeKind.Delegate) continue;
+            var call = list.Parent!;
+            var timer = call switch
+            {
+                ObjectCreationExpressionSyntax o => o.Type.ToString().EndsWith("Timer", StringComparison.Ordinal),
+                InvocationExpressionSyntax { Expression: MemberAccessExpressionSyntax m } => m.Expression.ToString().EndsWith("Timer", StringComparison.Ordinal),
+                _ => false,
+            };
+            var routedEvent = Callee(call) == "AddHandler" && before.Any(e => e.ToString().EndsWith("Event", StringComparison.Ordinal));
+            if (!timer && !routedEvent && !before.Any(IsCaption)) continue;
             // Delegate parameters/method groups are entry points too (e.g. Ui.IconButton(..., vm.Undo)).
             if (expression is not (AnonymousFunctionExpressionSyntax or IdentifierNameSyntax or MemberAccessExpressionSyntax)) continue;
-            var captions = before.Where(e => IsText(e) || model.GetTypeInfo(e, ct).Type?.SpecialType == SpecialType.System_String).Take(2).ToArray();
+            // ConvertedType depends on binding the callback body/method group. An inherited library
+            // method (e.g. Window.Close) can be unresolved even though the factory's Action parameter
+            // is known. Inspect that source parameter, or the callback's own declaration, instead.
+            if (expression is not AnonymousFunctionExpressionSyntax && !DelegateArgument(arg, list, model, ct)) continue;
+            var captions = before.Where(IsCaption).Take(2).ToArray();
             var label = Callee(list.Parent!) + (captions.Length == 0 ? "" : " «" + string.Join(" · ", captions
                 .Select(e => e is LiteralExpressionSyntax l ? l.Token.ValueText : e.ToString())) + "»");
-            label = Regex.Replace(label, @"\s+", " ");
-            result.Add((expression, memberId + "#h" + (result.Count + 1).ToString(System.Globalization.CultureInfo.InvariantCulture),
-                label.Length > 80 ? label[..80] + "…" : label));
+            Add(expression, label);
         }
         return result;
+        bool IsCaption(ExpressionSyntax e) => IsText(e)
+            || model.GetTypeInfo(e, ct).Type?.SpecialType == SpecialType.System_String
+            || e.DescendantNodesAndSelf().OfType<LiteralExpressionSyntax>().Any(l => l.IsKind(SyntaxKind.StringLiteralExpression))
+            || Resolved(e, model, ct)?.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax(ct) is { } declared
+                && (declared switch
+                {
+                    PropertyDeclarationSyntax p => p.Type,
+                    ParameterSyntax p => p.Type,
+                    VariableDeclaratorSyntax { Parent: VariableDeclarationSyntax v } => v.Type,
+                    _ => null,
+                }) is { } type && SignatureText(type) is "System.String" or "System.String?";
         static bool IsText(ExpressionSyntax e) => e.IsKind(SyntaxKind.StringLiteralExpression) || e is InterpolatedStringExpressionSyntax
             || e is BinaryExpressionSyntax { RawKind: (int)SyntaxKind.AddExpression } b && (IsText(b.Left) || IsText(b.Right));
         static string Callee(SyntaxNode call) => call switch
@@ -504,6 +540,30 @@ internal sealed partial class CSharpScanner : IRepositoryScanner
             ImplicitObjectCreationExpressionSyntax => "new",
             _ => "handler",
         };
+    }
+    private static bool DelegateArgument(ArgumentSyntax argument, ArgumentListSyntax list, SemanticModel model, CancellationToken ct)
+    {
+        var info = model.GetSymbolInfo(list.Parent!, ct);
+        var methods = info.Symbol is IMethodSymbol method ? [method] : info.CandidateSymbols.OfType<IMethodSymbol>();
+        foreach (var candidate in methods)
+        {
+            // Only source signatures are independent of installed package metadata.
+            if (candidate.DeclaringSyntaxReferences.Length == 0) continue;
+            var parameter = argument.NameColon is { } named
+                ? candidate.Parameters.FirstOrDefault(p => p.Name == named.Name.Identifier.ValueText)
+                : candidate.Parameters.ElementAtOrDefault(list.Arguments.IndexOf(argument));
+            if (parameter?.Type.TypeKind == TypeKind.Delegate) return true;
+        }
+        var symbol = Resolved(argument.Expression, model, ct);
+        if (symbol?.DeclaringSyntaxReferences.Length is not > 0) return false;
+        return symbol is IMethodSymbol || (symbol switch
+        {
+            IParameterSymbol p => p.Type,
+            ILocalSymbol l => l.Type,
+            IFieldSymbol f => f.Type,
+            IPropertySymbol p => p.Type,
+            _ => null,
+        })?.TypeKind == TypeKind.Delegate;
     }
     // Scanned assemblies are named "scan_…"; anything else (framework, NuGet) is a library.
     private static bool FromLibrary(ISymbol member) => member.ContainingAssembly is { } a && !a.Name.StartsWith("scan_", StringComparison.Ordinal);
@@ -614,7 +674,7 @@ internal sealed partial class CSharpScanner : IRepositoryScanner
         {
             if (s == null) return null;
             if (memberCache.TryGetValue(s, out var cached)) return cached.Length == 0 ? null : cached;
-            var doc = s.OriginalDefinition.GetDocumentationCommentId();
+            var doc = MemberSignature(s);
             var id = doc == null ? null : "member:" + module + ":" + doc;
             var canonical = id != null && c.Graph.Nodes.TryGetValue(id, out var node) ? node.Id : "";
             memberCache[s] = canonical;
@@ -647,11 +707,32 @@ internal sealed partial class CSharpScanner : IRepositoryScanner
                     .ToLookup(p => p.Impl!, p => p.Interface, SymbolEqualityComparer.Default);
             return lookup[member];
         }
+        void InheritedImplementations(TypeDeclarationSyntax declaration)
+        {
+            if (model.GetDeclaredSymbol(declaration, ct) is not INamedTypeSymbol type) return;
+            foreach (var contract in type.AllInterfaces.SelectMany(i => i.GetMembers()))
+            {
+                var implementation = type.FindImplementationForInterfaceMember(contract);
+                if (implementation == null || SymbolEqualityComparer.Default.Equals(implementation.ContainingType, type)) continue;
+                var contractType = TypeNode(contract.ContainingType);
+                var implementationType = TypeNode(implementation.ContainingType);
+                if (contractType == null || implementationType == null) continue;
+                var from = MemberNode(contract, contractType.Module);
+                var to = MemberNode(implementation, implementationType.Module);
+                if (from == null || to == null || from == to) continue;
+                var key = (EdgeKinds.Dispatch, from, to);
+                if (!edges.TryGetValue(key, out var edge)) edges[key] = edge = new(EdgeKinds.Dispatch, from, to);
+                edge.Add(new SourceLocation(tree.FilePath, Line(declaration), "Inherited interface implementation: " + type.Name));
+            }
+        }
         foreach (var node in root.DescendantNodes())
         {
             ct.ThrowIfCancellationRequested();
             switch (node)
             {
+                case TypeDeclarationSyntax declaration:
+                    InheritedImplementations(declaration);
+                    break;
                 // A call through an interface or a base class reaches this member too: link the member to what it
                 // implements or overrides, so callers of the contract lead to the code that actually runs.
                 case BaseMethodDeclarationSyntax or PropertyDeclarationSyntax or IndexerDeclarationSyntax or EventDeclarationSyntax:
@@ -684,7 +765,19 @@ internal sealed partial class CSharpScanner : IRepositoryScanner
                     Link(name, Resolve(name), EdgeKinds.Reference); break;
             }
         }
-        return edges.Values.Select(e => e.ToEdge()).ToList();
+        var connected = edges.Values.Select(e => e.ToEdge()).ToList();
+        // Preserve structural implementation/inheritance links. The reverse direction is a
+        // possible runtime target, not proof that this implementation is actually called.
+        foreach (var edge in connected.ToArray())
+            if (edge.Kind is EdgeKinds.Implement or EdgeKinds.Inherit
+                && c.Graph.Nodes.TryGetValue(edge.Source, out var source) && source.Kind == NodeKinds.Member
+                && c.Graph.Nodes.TryGetValue(edge.Target, out var target) && target.Kind == NodeKinds.Member)
+                connected.Add(edge with
+                {
+                    Id = $"{EdgeKinds.Dispatch}:{edge.Target}->{edge.Source}",
+                    Kind = EdgeKinds.Dispatch, Source = edge.Target, Target = edge.Source,
+                });
+        return connected;
     }
 
     private sealed class LocalEdge(string kind, string source, string target)

@@ -4,7 +4,7 @@
 // Wheel zooms at the pointer, drag pans, F fits. Data: graph.views (ViewsScanner); the ordinary views are untouched.
 'use strict';
 
-const LV_CODE = new Set(['call', 'reference', 'inherit', 'implement', 'import', 'xamlEvent', 'binding']);
+const LV_CODE = new Set(['call', 'dispatch', 'reference', 'inherit', 'implement', 'import', 'xamlEvent', 'binding']);
 const LV_ROWS = ['frontend', 'application', 'backend', 'domain', 'data', 'infrastructure', 'mixed', 'unclassified', 'tests', 'docs'];
 const LV_OTHER = 'lv:other', LV_REST = 'lv:rest';
 const LV_MAXCOLS = 12, LV_TOPLINKS = 45, LV_PARTNERS = 12;

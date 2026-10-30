@@ -9,7 +9,7 @@ namespace ProjMap.Core;
 ///  - Nodes form one tree through <see cref="Node.ParentId"/> (system → module → folder → file → type → member).
 ///    Roadmap items, docs and database tables are separate roots (ParentId = their group node).
 ///  - Edges are stored at the finest level known (including members/handlers). The viewer rolls them up.
-///  - Ids derive from paths / fully qualified names; handlers retain legacy ordinals with optional stable anchors.
+///  - Ids derive from paths / source signatures; handler ordinals are local to identical registration targets.
 /// </summary>
 public sealed record ProjectGraph
 {
@@ -101,6 +101,7 @@ public static class EdgeKinds
     public const string Package = "package";       // module → external package (target id "pkg:Name")
     public const string Reference = "reference";   // file/type uses a symbol of another file/type
     public const string Call = "call";
+    public const string Dispatch = "dispatch";   // contract/base member -> possible implementation/override
     public const string XamlEvent = "xamlEvent";   // XAML file -> code-behind event method
     public const string Binding = "binding";       // XAML file -> statically resolved data-context member
     public const string Inherit = "inherit";
