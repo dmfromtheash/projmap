@@ -103,6 +103,24 @@ test('container aggregates locate partial members in their actual file and expan
   assert.ok(flatten(p.linksBetween('sys', 'pkg:React')).some(e => e.source.id === 'mod:a'));
 });
 
+test('dispatch is a possible code target with direction, evidence and edge-kind filtering', () => {
+  const { EDGE_CAT, EDGE_RU } = require('../../src/ProjMap.App/web/model.js');
+  const g = graph();
+  const evidence = [{ path: 'a/src/deep/Editor.Part.cs', line: 7, snippet: 'Export()' }];
+  g.edges.push({ kind: 'dispatch', source: 'member:open', target: 'member:export', weight: 1, evidence });
+  const { model: m, projection: p } = setup(g);
+  assert.equal(EDGE_CAT.dispatch, 'code');
+  assert.equal(EDGE_RU.dispatch, 'возможная реализация');
+  assert.equal(m.edgesByKind.get('dispatch').length, 1);
+  assert.ok(m.edges.some(e => e.kind === 'dispatch'));
+  const outgoing = flatten(p.linksOf('member:open', { direction: 'out' })).filter(e => e.kind === 'dispatch');
+  assert.equal(outgoing.length, 1); assert.equal(outgoing[0].target.id, 'member:export');
+  assert.deepEqual(outgoing[0].evidence, evidence);
+  assert.equal(flatten(p.linksOf('member:export', { direction: 'in' })).filter(e => e.kind === 'dispatch').length, 1);
+  assert.ok(m.edges.filter(e => EDGE_CAT[e.kind] === 'code').some(e => e.kind === 'dispatch'));
+  assert.ok(!m.edges.filter(e => EDGE_CAT[e.kind] === 'cochange').some(e => e.kind === 'dispatch'));
+});
+
 test('drawing limits cannot truncate names or links (150 partners and all evidence)', () => {
   const g = graph();
   for (let i = 0; i < 150; i++) {
